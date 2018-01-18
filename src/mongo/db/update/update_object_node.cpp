@@ -30,6 +30,7 @@
 
 #include "mongo/db/update/update_object_node.h"
 
+#include "mongo/base/simple_string_data_comparator.h"
 #include "mongo/db/update/field_checker.h"
 #include "mongo/db/update/modifier_table.h"
 #include "mongo/db/update/update_array_node.h"
@@ -80,6 +81,49 @@ StatusWith<std::string> parseArrayFilterIdentifier(
     return identifier.toString();
 }
 
+namespace {
+class DocIndex {
+public:
+    DocIndex(mutablebson::Element element)
+        : _isArray(element.getType() == BSONType::Array),
+          _end(element.getDocument().end()),
+          _elementsByName(SimpleStringDataComparator::kInstance
+                              .makeStringDataUnorderedMap<mutablebson::Element>()) {
+        invariant(_isArray || element.getType() == BSONType::Object);
+        if (!_isArray) {
+            _elementsByName.reserve(element.countChildren());
+        }
+        for (auto child = element.leftChild(); child.ok(); child = child.rightSibling()) {
+            _elementsByIndex.push_back(child);
+            if (!_isArray) {
+                _elementsByName.insert(std::make_pair(child.getFieldName(), child));
+            }
+        }
+    }
+
+    mutablebson::Element getChild(StringData field) const {
+        if (_isArray) {
+            auto indexFromField = parseUnsignedBase10Integer(field);
+            if (indexFromField && *indexFromField < _elementsByIndex.size()) {
+                return _elementsByIndex[*indexFromField];
+            } else {
+                return _end;
+            }
+        } else {
+            auto child = _elementsByName.find(field);
+            return (child != _elementsByName.end()) ? child->second : _end;
+        }
+    }
+
+private:
+    bool _isArray;
+    mutablebson::Element _end;
+    StringDataUnorderedMap<mutablebson::Element> _elementsByName;
+    // std::unordered_map<std::string, mutablebson::Element> _elementsByName;
+    std::vector<mutablebson::Element> _elementsByIndex;
+};
+}
+
 /**
  * Gets the child of 'element' named 'field', if it exists. Otherwise returns a non-ok element.
  */
@@ -105,6 +149,7 @@ mutablebson::Element getChild(mutablebson::Element element, StringData field) {
 void applyChild(const UpdateNode& child,
                 StringData field,
                 UpdateNode::ApplyParams* applyParams,
+                const DocIndex& docIndex,
                 UpdateNode::ApplyResult* applyResult) {
 
     auto pathTakenSizeBefore = applyParams->pathTaken->numParts();
@@ -117,7 +162,7 @@ void applyChild(const UpdateNode& child,
         // We're already traversing a path with elements that don't exist yet, so we will definitely
         // need to append.
     } else {
-        childElement = getChild(applyParams->element, field);
+        childElement = docIndex.getChild(field);
     }
 
     if (childElement.ok()) {
@@ -153,8 +198,7 @@ void applyChild(const UpdateNode& child,
     // to the end of 'pathTaken'. We should advance 'element' to the end of 'pathTaken'.
     if (applyParams->pathTaken->numParts() > pathTakenSizeBefore) {
         for (auto i = pathTakenSizeBefore; i < applyParams->pathTaken->numParts(); ++i) {
-            applyParams->element =
-                getChild(applyParams->element, applyParams->pathTaken->getPart(i));
+            applyParams->element = docIndex.getChild(applyParams->pathTaken->getPart(i));
             invariant(applyParams->element.ok());
         }
     } else if (!applyParams->pathToCreate->empty()) {
@@ -162,15 +206,14 @@ void applyChild(const UpdateNode& child,
         // If the child is a leaf node, it may have created 'pathToCreate' without moving
         // 'pathToCreate' to the end of 'pathTaken'. We should move 'pathToCreate' to the end of
         // 'pathTaken' and advance 'element' to the end of 'pathTaken'.
-        childElement = getChild(applyParams->element, applyParams->pathToCreate->getPart(0));
+        childElement = docIndex.getChild(applyParams->pathToCreate->getPart(0));
         if (childElement.ok()) {
             applyParams->element = childElement;
             applyParams->pathTaken->appendPart(applyParams->pathToCreate->getPart(0));
 
             // Either the path was fully created or not created at all.
             for (size_t i = 1; i < applyParams->pathToCreate->numParts(); ++i) {
-                applyParams->element =
-                    getChild(applyParams->element, applyParams->pathToCreate->getPart(i));
+                applyParams->element = docIndex.getChild(applyParams->pathToCreate->getPart(i));
                 invariant(applyParams->element.ok());
                 applyParams->pathTaken->appendPart(applyParams->pathToCreate->getPart(i));
             }
@@ -379,6 +422,8 @@ UpdateNode::ApplyResult UpdateObjectNode::apply(ApplyParams applyParams) const {
 
     auto applyResult = ApplyResult::noopResult();
 
+    DocIndex docIndex(applyParams.element);
+
     for (const auto& pair : _children) {
 
         // If this child has the same field name as the positional child, they must be merged and
@@ -405,7 +450,8 @@ UpdateNode::ApplyResult UpdateObjectNode::apply(ApplyParams applyParams) const {
                 mergedChild = insertResult.first;
             }
 
-            applyChild(*mergedChild->second.get(), pair.first, &applyParams, &applyResult);
+            applyChild(
+                *mergedChild->second.get(), pair.first, &applyParams, docIndex, &applyResult);
 
             applyPositional = false;
             continue;
@@ -414,18 +460,25 @@ UpdateNode::ApplyResult UpdateObjectNode::apply(ApplyParams applyParams) const {
         // If 'matchedField' is alphabetically before the current child, we should apply the
         // positional child now.
         if (applyPositional && applyParams.matchedField < pair.first) {
-            applyChild(
-                *_positionalChild.get(), applyParams.matchedField, &applyParams, &applyResult);
+            applyChild(*_positionalChild.get(),
+                       applyParams.matchedField,
+                       &applyParams,
+                       docIndex,
+                       &applyResult);
             applyPositional = false;
         }
 
         // Apply the current child.
-        applyChild(*pair.second, pair.first, &applyParams, &applyResult);
+        applyChild(*pair.second, pair.first, &applyParams, docIndex, &applyResult);
     }
 
     // 'matchedField' is alphabetically after all children, so we apply it now.
     if (applyPositional) {
-        applyChild(*_positionalChild.get(), applyParams.matchedField, &applyParams, &applyResult);
+        applyChild(*_positionalChild.get(),
+                   applyParams.matchedField,
+                   &applyParams,
+                   docIndex,
+                   &applyResult);
     }
 
     return applyResult;
