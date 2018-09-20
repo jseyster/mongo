@@ -1,0 +1,181 @@
+/*-
+ *    Copyright (C) 2018 MongoDB Inc.
+ *
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
+ *
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ *    GNU Affero General Public License for more details.
+ *
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects
+ *    for all of the code used other than as permitted herein. If you modify
+ *    file(s) with this exception, you may extend this exception to your
+ *    version of the file(s), but you are not obligated to do so. If you do not
+ *    wish to do so, delete this exception statement from your version. If you
+ *    delete this exception statement from all source files in the program,
+ *    then also delete it in the license file.
+ */
+#ifndef HEADERUUID_5AF7DBB0_F911_4238_90CE_1145ED323D3B_DEFINED
+#define HEADERUUID_5AF7DBB0_F911_4238_90CE_1145ED323D3B_DEFINED
+
+#include <stddef.h>
+#include <stdint.h>
+
+#pragma push_macro("MONGO_API_CALL")
+#undef MONGO_API_CALL
+
+#pragma push_macro("MONGO_API_IMPORT")
+#undef MONGO_API_IMPORT
+
+#pragma push_macro("MONGO_API_EXPORT")
+#undef MONGO_API_EXPORT
+
+#pragma push_macro("MONGO_EMBEDDED_CAPI_API")
+#undef MONGO_EMBEDDED_CAPI_API
+
+#if defined(_WIN32)
+#define MONGO_API_CALL __cdecl
+#define MONGO_API_IMPORT __declspec(dllimport)
+#define MONGO_API_EXPORT __declspec(dllexport)
+#else
+#define MONGO_API_CALL
+#define MONGO_API_IMPORT __attribute__((visibility("default")))
+#define MONGO_API_EXPORT __attribute__((used, visibility("default")))
+#endif
+
+#if defined(MONGO_EMBEDDED_CAPI_STATIC)
+#define MONGO_EMBEDDED_CAPI_API
+#else
+#if defined(MONGO_EMBEDDED_CAPI_COMPILING)
+#define MONGO_EMBEDDED_CAPI_API MONGO_API_EXPORT
+#else
+#define MONGO_EMBEDDED_CAPI_API MONGO_API_IMPORT
+#endif
+#endif
+
+#ifdef _DOXYGEN
+/**
+ * Stitch support POC.
+ */
+namespace mongo {
+namespace embedded {
+// Doxygen requires a namespace when processing global scope functions, in order to generate
+// documentation. We also use it as a hook to provide library-wide documentation.
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+//
+// BEGIN SHAMELESSLY STOLEN FROM capi.h
+//
+
+typedef enum {
+    MONGO_EMBEDDED_V1_ERROR_IN_REPORTING_ERROR = -2,
+    MONGO_EMBEDDED_V1_ERROR_UNKNOWN = -1,
+
+    MONGO_EMBEDDED_V1_SUCCESS = 0,
+
+    MONGO_EMBEDDED_V1_ERROR_ENOMEM = 1,
+    MONGO_EMBEDDED_V1_ERROR_EXCEPTION = 2,
+    MONGO_EMBEDDED_V1_ERROR_LIBRARY_ALREADY_INITIALIZED = 3,
+    MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED = 4,
+    MONGO_EMBEDDED_V1_ERROR_INVALID_LIB_HANDLE = 5,
+    MONGO_EMBEDDED_V1_ERROR_DB_INITIALIZATION_FAILED = 6,
+    MONGO_EMBEDDED_V1_ERROR_INVALID_DB_HANDLE = 7,
+    MONGO_EMBEDDED_V1_ERROR_HAS_DB_HANDLES_OPEN = 8,
+    MONGO_EMBEDDED_V1_ERROR_DB_MAX_OPEN = 9,
+    MONGO_EMBEDDED_V1_ERROR_DB_CLIENTS_OPEN = 10,
+    MONGO_EMBEDDED_V1_ERROR_INVALID_CLIENT_HANDLE = 11,
+    MONGO_EMBEDDED_V1_ERROR_REENTRANCY_NOT_ALLOWED = 12,
+} mongo_embedded_v1_error;
+
+typedef struct mongo_embedded_v1_status mongo_embedded_v1_status;
+typedef struct mongo_embedded_v1_lib mongo_embedded_v1_lib;
+typedef struct mongo_embedded_v1_init_params mongo_embedded_v1_init_params;
+typedef struct mongo_embedded_v1_matcher mongo_embedded_v1_matcher;
+
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_lib* MONGO_API_CALL mongo_embedded_v1_lib_init(
+    const mongo_embedded_v1_init_params* params, mongo_embedded_v1_status* status);
+
+
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_matcher* MONGO_API_CALL
+mongo_embedded_v1_matcher_create(mongo_embedded_v1_lib* lib,
+                                 mongo_embedded_v1_status* status);
+
+/**
+ * Valid bits for the log_flags bitfield in mongo_embedded_v1_init_params.
+ */
+typedef enum {
+    /** Placeholder for no logging */
+    MONGO_EMBEDDED_V1_LOG_NONE = 0,
+
+    /** Logs to stdout */
+    MONGO_EMBEDDED_V1_LOG_STDOUT = 1,
+
+    /** Logs to stderr (not supported yet) */
+    // MONGO_EMBEDDED_V1_LOG_STDERR = 2,
+
+    /** Logs via log callback that must be provided when this bit is set. (not supported) */
+    // MONGO_EMBEDDED_V1_LOG_CALLBACK = 4
+} mongo_embedded_v1_log_flags;
+
+// See the documentation of this object on the comments above its forward declaration
+struct mongo_embedded_v1_init_params {
+    /**
+     * Optional null-terminated YAML formatted MongoDB configuration string.
+     * See documentation for valid options.
+     */
+    const char* yaml_config;
+
+    /**
+     * Bitfield of log destinations, accepts values from mongo_embedded_v1_log_flags.
+     * Default is stdout.
+     */
+    uint64_t log_flags;
+
+    /**
+     * Optional user data to be returned in the log callback.
+     */
+    void* log_user_data;
+};
+
+//
+// END SHAMELESSLY STOLEN FROM capi.h
+//
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL mongo_embedded_v1_test_func();
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif
+
+#ifdef _DOXYGEN
+}  // namespace embedded
+}  // namespace mongo
+#endif
+
+#undef MONGO_EMBEDDED_CAPI_API
+#pragma pop_macro("MONGO_EMBEDDED_CAPI_API")
+
+#undef MONGO_API_EXPORT
+#pragma push_macro("MONGO_API_EXPORT")
+
+#undef MONGO_API_IMPORT
+#pragma push_macro("MONGO_API_IMPORT")
+
+#undef MONGO_API_CALL
+#pragma pop_macro("MONGO_API_CALL")
+
+#endif  // HEADERUUID_5AF7DBB0_F911_4238_90CE_1145ED323D3B_DEFINED

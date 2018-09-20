@@ -141,6 +141,21 @@ capiEnv.Library(
     ],
 )
 
+capiEnv.Library(
+    target='mongo_stitch_support',
+    source=[
+        'stitch_support.cpp',
+    ],
+    LIBDEPS_PRIVATE=[
+        '$BUILD_DIR/mongo/db/service_context',
+        '$BUILD_DIR/mongo/db/matcher/expressions',
+        '$BUILD_DIR/mongo/transport/transport_layer_mock',
+    ],
+    INSTALL_ALIAS=[
+        'stitch-dev',
+    ],
+)
+
 if get_option('install-mode') == 'hygienic':
     env.AutoInstall(
         'include/mongo/embedded-v1/mongo/embedded',
@@ -168,6 +183,20 @@ if get_option('link-model') != 'dynamic-sdk':
         ],
         INSTALL_ALIAS=[
             'embedded-test',
+        ],
+    )
+
+    capiTest = yamlEnv.Program(
+        target='stitch_support_test',
+        source=[
+            'stitch_support_test.cpp',
+        ],
+        LIBDEPS=[
+            '$BUILD_DIR/mongo/base',
+            'mongo_stitch_support',
+        ],
+        INSTALL_ALIAS=[
+            'stitch-test',
         ],
     )
 
