@@ -32,6 +32,9 @@
 
 #include <memory>
 #include <string>
+#include <vector>
+
+#include "mongo/db/field_ref.h"
 
 namespace mongo {
 
@@ -73,9 +76,13 @@ public:
 
     void setElemMatchKey(const std::string& elemMatchKey);
 
+    const std::vector<std::string>& elemMatchPath() const;
+    void setElemMatchPath(const FieldRef& elemMatchPath);
+
 private:
     bool _loadedRecord;
     bool _elemMatchKeyRequested;
     std::unique_ptr<std::string> _elemMatchKey;
+    std::vector<std::string> _elemMatchPath;
 };
 }

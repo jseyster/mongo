@@ -140,6 +140,7 @@ void BSONElementIterator::_setTraversalStart(size_t suffixIndex, BSONElement ele
 
 void BSONElementIterator::ArrayIterationState::reset(const FieldRef& ref, int start) {
     restOfPath = ref.dottedField(start).toString();
+    pathToArray = FieldRef(ref.dottedSubstring(0, start));
     hasMore = restOfPath.size() > 0;
     if (hasMore) {
         nextPieceOfPath = ref.getPart(start);
@@ -159,6 +160,7 @@ bool BSONElementIterator::ArrayIterationState::isArrayOffsetMatch(StringData fie
 void BSONElementIterator::ArrayIterationState::startIterator(BSONElement e) {
     _theArray = e;
     _iterator.reset(new BSONObjIterator(_theArray.Obj()));
+    _currentIndex = -1;
 }
 
 bool BSONElementIterator::ArrayIterationState::more() {
@@ -167,6 +169,7 @@ bool BSONElementIterator::ArrayIterationState::more() {
 
 BSONElement BSONElementIterator::ArrayIterationState::next() {
     _current = _iterator->next();
+    ++_currentIndex;
     return _current;
 }
 
@@ -273,6 +276,7 @@ bool BSONElementIterator::more() {
                 // Our path terminates at this array.  _next should point at the current array
                 // element.
                 _next.reset(eltInArray, eltInArray);
+                _next.setArrayPath(_arrayIterationState.pathToArray);
                 return true;
             }
 
@@ -353,6 +357,29 @@ ElementIterator::Context BSONElementIterator::next() {
         // the element with a value of 2 should be returned with an array offset of 0.
         if (!_arrayIterationState._current.eoo()) {
             e.setArrayOffset(_arrayIterationState._current);
+            e.setArrayPath(_arrayIterationState.pathToArray);
+        } else {
+            /**
+             * The 'arrayPath' is used to provide the path to an implicitly traversed array (as
+             * provided by the 'mongo_embedded_v1_match_details_elem_match_path_*' functions in
+             * stitch_support.h).
+             *
+             * One optional feature for this PoC is to provide the components of the path in a way
+             * that distinguishes array index components from field components with a numeric field
+             * name. If we decided to implement that, we would store the 'pathToArray' using a data
+             * structure that can store that additional information with each component, and the
+             * '_currentIndex' value would get marked as an array index component.
+             *
+             * If we created another path representation for this purpose, we could go one step
+             * further, and encode multiple implicit traversals. Right now, the "elem_match_path"
+             * only encodes the first implicitly traversed array.
+             */
+            auto& frontPath = _arrayIterationState.pathToArray;
+            auto& backPath = e.arrayPath();
+            auto concatPath = frontPath.dottedField().toString() + (!frontPath.empty() ? "." : "") +
+                std::to_string(_arrayIterationState._currentIndex) +
+                (!backPath.empty() ? "." : "") + backPath.dottedField().toString();
+            e.setArrayPath(FieldRef(concatPath));
         }
         return e;
     }
@@ -360,4 +387,4 @@ ElementIterator::Context BSONElementIterator::next() {
     _next.reset();
     return x;
 }
-}
+}  // namespace mongo

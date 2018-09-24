@@ -124,6 +124,10 @@ public:
             _arrayOffset = e;
         }
 
+        void setArrayPath(FieldRef arrayPath) {
+            _arrayPath = std::move(arrayPath);
+        }
+
         BSONElement element() const {
             return _element;
         }
@@ -131,9 +135,14 @@ public:
             return _arrayOffset;
         }
 
+        const FieldRef& arrayPath() const {
+            return _arrayPath;
+        }
+
     private:
         BSONElement _element;
         BSONElement _arrayOffset;
+        FieldRef _arrayPath;
     };
 
     virtual ~ElementIterator();
@@ -247,6 +256,7 @@ private:
         }
 
         std::string restOfPath;
+        FieldRef pathToArray;
         bool hasMore;
         StringData nextPieceOfPath;
         bool nextPieceOfPathIsNumber;
@@ -254,6 +264,7 @@ private:
         BSONElement _theArray;
         BSONElement _current;
         std::unique_ptr<BSONObjIterator> _iterator;
+        int _currentIndex;
     };
 
     ArrayIterationState _arrayIterationState;

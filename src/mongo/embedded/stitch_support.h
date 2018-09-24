@@ -74,12 +74,24 @@ namespace embedded {
 #endif
 
 #ifdef __cplusplus
+
 extern "C" {
 #endif
 
-//
-// BEGIN SHAMELESSLY STOLEN FROM capi.h
-//
+typedef struct mongo_embedded_v1_status mongo_embedded_v1_status;
+
+/**
+ * The embedded status object is copied from the C API. Clients can pass the same status object to
+ * each function that takes a status object as one of its parameters, checking each time if the
+ * function failed with an error status (using mongo_embedded_v1_status_get_error()).
+ *
+ * Clients can also pass NULL, but they will not be able to determine the cause of a failure.
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_status* MONGO_API_CALL
+mongo_embedded_v1_status_create(void);
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_status_destroy(mongo_embedded_v1_status* status);
 
 typedef enum {
     MONGO_EMBEDDED_V1_ERROR_IN_REPORTING_ERROR = -2,
@@ -101,18 +113,103 @@ typedef enum {
     MONGO_EMBEDDED_V1_ERROR_REENTRANCY_NOT_ALLOWED = 12,
 } mongo_embedded_v1_error;
 
-typedef struct mongo_embedded_v1_status mongo_embedded_v1_status;
+MONGO_EMBEDDED_CAPI_API int MONGO_API_CALL
+mongo_embedded_v1_status_get_error(const mongo_embedded_v1_status* status);
+
+MONGO_EMBEDDED_CAPI_API const char* MONGO_API_CALL
+mongo_embedded_v1_status_get_explanation(const mongo_embedded_v1_status* status);
+
+MONGO_EMBEDDED_CAPI_API int MONGO_API_CALL
+mongo_embedded_v1_status_get_code(const mongo_embedded_v1_status* status);
+
+typedef struct mongo_embedded_v1_match_details mongo_embedded_v1_match_details;
+
+/**
+ * Create a "match details" object to pass to mongo_embedded_v1_check_match(), which will populate
+ * the match details with an "elem_path" if the match traverses an array element.
+ *
+ * Clients can resuse the same match details object for multiple calls to
+ * mongo_embedded_v1_check_match().
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_match_details* MONGO_API_CALL
+mongo_embedded_v1_match_details_create(void);
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_match_details_destroy(mongo_embedded_v1_match_details* match_details);
+
+/**
+ * When the matcher performs an implicit array traversal to find the matching element, the
+ * 'match_details' will include an "elem_match_path" value, which is the path to the array that was
+ * traversed. Callers should always check that this function returns true before calling
+ * mongo_embedded_v1_match_details_elem_match_path_length() or
+ * mongo_embedded_v1_match_details_elem_match_path_component().
+ *
+ * If a match traverses two or more arrays, the "elem_match_path" references the first array along
+ * the path.
+ */
+MONGO_EMBEDDED_CAPI_API bool MONGO_API_CALL
+mongo_embedded_v1_match_details_has_elem_match_path(mongo_embedded_v1_match_details* match_details);
+
+/**
+ * The length of the "elem_match_path" iff it exists. Always call this function to ensure an index
+ * is in bounds before calling mongo_embedded_v1_match_details_elem_match_path_component.
+ */
+MONGO_EMBEDDED_CAPI_API size_t MONGO_API_CALL
+mongo_embedded_v1_match_details_elem_match_path_length(
+    mongo_embedded_v1_match_details* match_details);
+
+/**
+ * Return a component from the "elem_match_path" from a given 'match_details' value. As an example,
+ * the path 'a.b.c' has three components: ['a', 'b', 'c'].
+ *
+ * The "elem_match_path" does not distinguish a path component that represents an array index from a
+ * path component that represents a numerical field name (e.g., path 'a.0.b' in {a: {'0': {b: 1}} vs
+ * {a: [{b: 1}]}). If we decide to add support for that distinction, I suggest two additional out
+ * parameters to indicate an array index parameter and return its numerical value.
+ */
+MONGO_EMBEDDED_CAPI_API const char* MONGO_API_CALL
+mongo_embedded_v1_match_details_elem_match_path_component(
+    mongo_embedded_v1_match_details* match_details, size_t index /*,
+    bool* out_is_array_index,
+    size_t* out_component_as_index*/);
+
 typedef struct mongo_embedded_v1_lib mongo_embedded_v1_lib;
 typedef struct mongo_embedded_v1_init_params mongo_embedded_v1_init_params;
 typedef struct mongo_embedded_v1_matcher mongo_embedded_v1_matcher;
 
+/**
+ * A client program should call this library initialization function exactly once.
+ */
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_lib* MONGO_API_CALL mongo_embedded_v1_lib_init(
     const mongo_embedded_v1_init_params* params, mongo_embedded_v1_status* status);
 
+/**
+ * A matcher object is used to determine if a BSON document matches a predicate. The predicate
+ * itself is also represented as a BSON object, which is passed in the 'patternBSON' argument.
+ *
+ * This function will fail if the predicate is invalid, returning NULL and populating 'status' with
+ * information about the error.
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_matcher* MONGO_API_CALL mongo_embedded_v1_matcher_create(
+    mongo_embedded_v1_lib* lib, const char* patternBSON, mongo_embedded_v1_status* status);
 
-MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_matcher* MONGO_API_CALL
-mongo_embedded_v1_matcher_create(mongo_embedded_v1_lib* lib,
-                                 mongo_embedded_v1_status* status);
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_matcher_destroy(mongo_embedded_v1_matcher* const matcher);
+
+/**
+ * Check if the 'documentBSON' input matches the predicate represented by the 'matcher' object and
+ * populate 'matchDetails' (if it is not NULL) with information about implicit array traversal.
+ *
+ * Note that callers should always check for an error status in the 'status' object, because a false
+ * return value can indicate that the document did not match or that an error occurred during
+ * matching.
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_error MONGO_API_CALL
+mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
+                              const char* documentBSON,
+                              bool* isMatch,
+                              mongo_embedded_v1_match_details* matchDetails,
+                              mongo_embedded_v1_status* status);
 
 /**
  * Valid bits for the log_flags bitfield in mongo_embedded_v1_init_params.
@@ -150,12 +247,6 @@ struct mongo_embedded_v1_init_params {
      */
     void* log_user_data;
 };
-
-//
-// END SHAMELESSLY STOLEN FROM capi.h
-//
-
-MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL mongo_embedded_v1_test_func();
 
 #ifdef __cplusplus
 }  // extern "C"

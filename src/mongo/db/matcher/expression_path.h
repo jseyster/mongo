@@ -62,7 +62,9 @@ public:
             }
             if (details && details->needRecord() && !e.arrayOffset().eoo()) {
                 details->setElemMatchKey(e.arrayOffset().fieldName());
+                details->setElemMatchPath(e.arrayPath());
             }
+
             return true;
         }
         return false;

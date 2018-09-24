@@ -34,6 +34,7 @@
 
 #include "mongo/bson/bsonobj.h"
 #include "mongo/db/client.h"
+#include "mongo/db/matcher/match_details.h"
 #include "mongo/db/matcher/matcher.h"
 #include "mongo/db/pipeline/expression_context.h"
 #include "mongo/logger/log_manager.h"
@@ -178,7 +179,8 @@ struct mongo_embedded_v1_lib {
 };
 
 struct mongo_embedded_v1_matcher {
-    mongo_embedded_v1_matcher(mongo::ServiceContext::UniqueClient client, const mongo::BSONObj& pattern)
+    mongo_embedded_v1_matcher(mongo::ServiceContext::UniqueClient client,
+                              const mongo::BSONObj& pattern)
         : client(std::move(client)),
           opCtx(this->client->makeOperationContext()),
           matcher(pattern, new mongo::ExpressionContext(opCtx.get(), nullptr)){};
@@ -186,6 +188,14 @@ struct mongo_embedded_v1_matcher {
     mongo::ServiceContext::UniqueClient client;
     mongo::ServiceContext::UniqueOperationContext opCtx;
     mongo::Matcher matcher;
+};
+
+struct mongo_embedded_v1_match_details {
+    mongo::MatchDetails matchDetails;
+
+    mongo_embedded_v1_match_details() : matchDetails() {
+        matchDetails.requestElemMatchKey();
+    }
 };
 
 namespace mongo {
@@ -255,6 +265,7 @@ mongo_embedded_v1_lib* stitch_support_lib_init(mongo_embedded_v1_init_params con
 }
 
 mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib,
+                                       BSONObj pattern,
                                        mongo_embedded_v1_status& status) {
     if (!library) {
         throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
@@ -268,10 +279,24 @@ mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib,
                               "Library is not yet initialized."};
     }
 
-    std::cout << "Welcome to the Stitch Support lib!" << std::endl;
+    // BSONObj pattern = BSON("$gt" << 1);
+    return new mongo_embedded_v1_matcher(lib->serviceContext->makeClient("stitch_support"),
+                                         pattern);
+}
 
-    BSONObj pattern = BSON("a" << 1);
-    return new mongo_embedded_v1_matcher(lib->serviceContext->makeClient("stitch_support"), pattern);
+int capi_status_get_error(const mongo_embedded_v1_status* const status) noexcept {
+    invariant(status);
+    return status->error;
+}
+
+const char* capi_status_get_what(const mongo_embedded_v1_status* const status) noexcept {
+    invariant(status);
+    return status->what.c_str();
+}
+
+int capi_status_get_code(const mongo_embedded_v1_status* const status) noexcept {
+    invariant(status);
+    return status->exception_code;
 }
 
 template <typename Function,
@@ -351,24 +376,106 @@ mongo_embedded_v1_lib* MONGO_API_CALL mongo_embedded_v1_lib_init(
     });
 }
 
-mongo_embedded_v1_matcher* MONGO_API_CALL mongo_embedded_v1_matcher_create(
-    mongo_embedded_v1_lib* lib, mongo_embedded_v1_status* const statusPtr) {
+mongo_embedded_v1_matcher* MONGO_API_CALL
+mongo_embedded_v1_matcher_create(mongo_embedded_v1_lib* lib,
+                                 const char* patternBSON,
+                                 mongo_embedded_v1_status* const statusPtr) {
     return enterCXX(statusPtr, [&](mongo_embedded_v1_status& status) {
-        return mongo::matcher_new(lib, status);
+        mongo::BSONObj pattern(patternBSON);
+        return mongo::matcher_new(lib, pattern.getOwned(), status);
     });
 }
 
-void MONGO_API_CALL mongo_embedded_v1_test_func() {
-    std::cout << "Welcome to the Stitch Support lib!" << std::endl;
-
-    // const boost::intrusive_ptr<mongo::ExpressionContext> expCtx(
-    //    new mongo::ExpressionContext(nullptr, nullptr));
-
-    // auto pattern = BSON("$gt" << 1);
-    // mongo::Matcher m(pattern, expCtx);
-
-    // bool matched = m.matches(BSON("a" << 1));
-    // std::cout << "Result: " << (matched ? "Yep" : "Nah") << std::endl;
+void MONGO_API_CALL mongo_embedded_v1_matcher_destroy(mongo_embedded_v1_matcher* const matcher) {
+    delete matcher;
 }
 
+
+mongo_embedded_v1_error MONGO_API_CALL
+mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
+                              const char* documentBSON,
+                              bool* isMatch,
+                              mongo_embedded_v1_match_details* matchDetails,
+                              mongo_embedded_v1_status* statusPtr) {
+    mongo_embedded_v1_status tempStatus;
+    if (!statusPtr) {
+        statusPtr = &tempStatus;
+    }
+
+    enterCXX(statusPtr, [&](mongo_embedded_v1_status& status) {
+        if (matchDetails) {
+            matchDetails->matchDetails.resetOutput();
+        }
+
+        mongo::BSONObj document(documentBSON);
+        *isMatch = matcher->matcher.matches(document,
+                                            matchDetails ? &matchDetails->matchDetails : nullptr);
+    });
+
+    return statusPtr->error;
+}
+
+int MONGO_API_CALL
+mongo_embedded_v1_status_get_error(const mongo_embedded_v1_status* const status) {
+    return mongo::capi_status_get_error(status);
+}
+
+const char* MONGO_API_CALL
+mongo_embedded_v1_status_get_explanation(const mongo_embedded_v1_status* const status) {
+    return mongo::capi_status_get_what(status);
+}
+
+int MONGO_API_CALL mongo_embedded_v1_status_get_code(const mongo_embedded_v1_status* const status) {
+    return mongo::capi_status_get_code(status);
+}
+
+mongo_embedded_v1_status* MONGO_API_CALL mongo_embedded_v1_status_create(void) {
+    return new mongo_embedded_v1_status;
+}
+
+void MONGO_API_CALL mongo_embedded_v1_status_destroy(mongo_embedded_v1_status* const status) {
+    delete status;
+}
+
+mongo_embedded_v1_match_details* MONGO_API_CALL mongo_embedded_v1_match_details_create(void) {
+    return new mongo_embedded_v1_match_details;
+};
+
+void MONGO_API_CALL
+mongo_embedded_v1_match_details_destroy(mongo_embedded_v1_match_details* match_details) {
+    delete match_details;
+};
+
+bool MONGO_API_CALL mongo_embedded_v1_match_details_has_elem_match_path(
+    mongo_embedded_v1_match_details* match_details) {
+    return match_details->matchDetails.hasElemMatchKey();
+}
+
+size_t MONGO_API_CALL mongo_embedded_v1_match_details_elem_match_path_length(
+    mongo_embedded_v1_match_details* match_details) {
+    invariant(match_details->matchDetails.hasElemMatchKey());
+    return match_details->matchDetails.elemMatchPath().size();
+}
+
+const char* MONGO_API_CALL mongo_embedded_v1_match_details_elem_match_path_component(
+    mongo_embedded_v1_match_details* match_details, size_t index /*,
+    bool* out_is_array_index,
+    size_t* out_component_as_index*/) {
+    invariant(match_details->matchDetails.hasElemMatchKey());
+    invariant(index < match_details->matchDetails.elemMatchPath().size());
+
+    auto& component = match_details->matchDetails.elemMatchPath()[index];
+
+#if 0
+    if (out_is_array_index) {
+        // ...
+    }
+
+    if (out_component_as_index) {
+        // ...
+    }
+#endif
+
+    return component.c_str();
+}
 }  // extern "C"

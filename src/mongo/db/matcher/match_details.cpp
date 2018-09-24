@@ -45,6 +45,7 @@ MatchDetails::MatchDetails() : _elemMatchKeyRequested() {
 void MatchDetails::resetOutput() {
     _loadedRecord = false;
     _elemMatchKey.reset();
+    _elemMatchPath.clear();
 }
 
 bool MatchDetails::hasElemMatchKey() const {
@@ -59,6 +60,19 @@ std::string MatchDetails::elemMatchKey() const {
 void MatchDetails::setElemMatchKey(const std::string& elemMatchKey) {
     if (_elemMatchKeyRequested) {
         _elemMatchKey.reset(new std::string(elemMatchKey));
+    }
+}
+
+const std::vector<std::string>& MatchDetails::elemMatchPath() const {
+    verify(hasElemMatchKey());
+    return _elemMatchPath;
+}
+
+void MatchDetails::setElemMatchPath(const FieldRef& elemMatchPath) {
+    _elemMatchPath.clear();
+    _elemMatchPath.reserve(elemMatchPath.numParts());
+    for (size_t i = 0; i < elemMatchPath.numParts(); ++i) {
+        _elemMatchPath.push_back(elemMatchPath.getPart(i).toString());
     }
 }
 
