@@ -22,11 +22,20 @@ yamlEnv = env.Clone()
 yamlEnv.InjectThirdPartyIncludePaths(libraries=['yaml'])
 
 env.Library(
+    target='embedded_auth',
+    source=[
+        'embedded_auth_manager.cpp',
+        'embedded_auth_session.cpp',
+    ],
+    LIBDEPS_PRIVATE=[
+        '$BUILD_DIR/mongo/db/auth/auth',
+    ]
+)
+
+env.Library(
     target='embedded',
     source=[
         'embedded.cpp',
-        'embedded_auth_manager.cpp',
-        'embedded_auth_session.cpp',
         'embedded_commands.cpp',
         'embedded_ismaster.cpp',
         'embedded_options.cpp',
@@ -74,6 +83,7 @@ env.Library(
         '$BUILD_DIR/mongo/rpc/client_metadata',
         '$BUILD_DIR/mongo/util/options_parser/options_parser',
         '$BUILD_DIR/mongo/util/version_impl',
+        'embedded_auth',
     ]
 )
 
@@ -149,7 +159,9 @@ capiEnv.Library(
     LIBDEPS_PRIVATE=[
         '$BUILD_DIR/mongo/db/service_context',
         '$BUILD_DIR/mongo/db/matcher/expressions',
+        '$BUILD_DIR/mongo/db/query_exec',
         '$BUILD_DIR/mongo/transport/transport_layer_mock',
+        'embedded_auth',
     ],
     INSTALL_ALIAS=[
         'stitch-dev',

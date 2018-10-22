@@ -78,6 +78,13 @@ public:
      */
     Status transform(WorkingSetMember* member) const;
 
+    /**
+     * See transform(...) below.
+     */
+    bool transformRequiresDetails() const {
+        return ARRAY_OP_POSITIONAL == _arrayOpType;
+    }
+
 private:
     //
     // Initialization
@@ -111,13 +118,6 @@ private:
     Status transform(const BSONObj& in,
                      BSONObjBuilder* bob,
                      const MatchDetails* details = NULL) const;
-
-    /**
-     * See transform(...) above.
-     */
-    bool transformRequiresDetails() const {
-        return ARRAY_OP_POSITIONAL == _arrayOpType;
-    }
 
     /**
      * Appends the element 'e' to the builder 'bob', possibly descending into sub-fields of 'e'

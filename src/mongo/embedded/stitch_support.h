@@ -176,6 +176,7 @@ mongo_embedded_v1_match_details_elem_match_path_component(
 typedef struct mongo_embedded_v1_lib mongo_embedded_v1_lib;
 typedef struct mongo_embedded_v1_init_params mongo_embedded_v1_init_params;
 typedef struct mongo_embedded_v1_matcher mongo_embedded_v1_matcher;
+typedef struct mongo_embedded_v1_projection mongo_embedded_v1_projection;
 
 /**
  * A client program should call this library initialization function exactly once.
@@ -200,9 +201,8 @@ mongo_embedded_v1_matcher_destroy(mongo_embedded_v1_matcher* const matcher);
  * Check if the 'documentBSON' input matches the predicate represented by the 'matcher' object and
  * populate 'matchDetails' (if it is not NULL) with information about implicit array traversal.
  *
- * Note that callers should always check for an error status in the 'status' object, because a false
- * return value can indicate that the document did not match or that an error occurred during
- * matching.
+ * When the check is successful, this function returns MONGO_EMBEDDED_V1_SUCCESS, sets 'isMatch' to
+ * indicate whether the document matched, and populates 'matchDetails' (when it is not NULL).
  */
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_error MONGO_API_CALL
 mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
@@ -210,6 +210,51 @@ mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
                               bool* isMatch,
                               mongo_embedded_v1_match_details* matchDetails,
                               mongo_embedded_v1_status* status);
+
+/**
+ * A projection object is used to apply a projection to a BSON document. The projection
+ * specification is also represented as a BSON document, which is passed in the 'specBSON' argument.
+ * The syntax used for projection is the same as a MongoDB "find" command (i.e., not an aggregation
+ * $project stage).
+ *
+ * If the projection specification include's a positional ($) operator, then the caller must pass a
+ * mongo_embedded_v1_matcher, which is used to determine which array element matches the positional.
+ * The 'matcher' argument is not used when the specification has no positional operator, and it can
+ * be NULL.
+ *
+ * The newly created projection object does _not_ take ownership of its 'matcher' object. The client
+ * is responsible for ensuring that the matcher continues to exist for the lifetime of the
+ * projection and for ultimately destroying both the projection and the matcher.
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_projection* MONGO_API_CALL
+mongo_embedded_v1_projection_create(mongo_embedded_v1_lib* lib,
+                                    const char* specBSON,
+                                    mongo_embedded_v1_matcher* matcher,
+                                    mongo_embedded_v1_status* status);
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_projection_destroy(mongo_embedded_v1_projection* const projection);
+
+/**
+ * Apply a projection to an input document, writing the resulting BSON to the 'output' buffer.
+ * Returns a pointer to the output buffer (which is the same as the value of 'output' when it is not
+ * NULL) on success or NULL on error (including when 'output_size' is too small to fit the
+ * projection result).
+ *
+ * The caller may pass NULL for the 'output' argument, in which case this function allocates a
+ * buffer of exactly the right size for the resulting document (ignoring the value of
+ * 'output_size'). The caller is responsible for destroying the resulting buffer with free().
+ *
+ * If the projection includes a positional ($) operator, the caller should verify before applying it
+ * that the associated matcher matches the input document. A non-matching input document will
+ * trigger an assertion failure.
+ */
+MONGO_EMBEDDED_CAPI_API char* MONGO_API_CALL
+mongo_embedded_v1_projection_apply(mongo_embedded_v1_projection* const projection,
+                                   const char* documentBSON,
+                                   char* output,
+                                   size_t output_size,
+                                   mongo_embedded_v1_status* status);
 
 /**
  * Valid bits for the log_flags bitfield in mongo_embedded_v1_init_params.

@@ -34,6 +34,7 @@
 
 #include "mongo/bson/bsonobj.h"
 #include "mongo/db/client.h"
+#include "mongo/db/exec/projection_exec.h"
 #include "mongo/db/matcher/match_details.h"
 #include "mongo/db/matcher/matcher.h"
 #include "mongo/db/pipeline/expression_context.h"
@@ -198,6 +199,29 @@ struct mongo_embedded_v1_match_details {
     }
 };
 
+struct mongo_embedded_v1_projection {
+    mongo_embedded_v1_projection(mongo::ServiceContext::UniqueClient client,
+                                 mongo_embedded_v1_matcher* matcher,
+                                 const mongo::BSONObj& pattern)
+        : client(std::move(client)),
+          opCtx(this->client->makeOperationContext()),
+          projectionExec(opCtx.get(),
+                         pattern,
+                         matcher ? matcher->matcher.getMatchExpression() : nullptr,
+                         nullptr /* collator */),
+          matcher(matcher) {
+        uassert(50952,
+                "Projections with a positional operator require a matcher",
+                matcher || !projectionExec.transformRequiresDetails());
+    }
+
+    mongo::ServiceContext::UniqueClient client;
+    mongo::ServiceContext::UniqueOperationContext opCtx;
+    mongo::ProjectionExec projectionExec;
+
+    mongo_embedded_v1_matcher* matcher;
+};
+
 namespace mongo {
 namespace {
 
@@ -264,24 +288,40 @@ mongo_embedded_v1_lib* stitch_support_lib_init(mongo_embedded_v1_init_params con
     throw;
 }
 
-mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib,
-                                       BSONObj pattern,
-                                       mongo_embedded_v1_status& status) {
+mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib, BSONObj pattern) {
     if (!library) {
         throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
-                              "Cannot create a new database handle when the MongoDB Embedded "
-                              "Library is not yet initialized."};
+                              "Cannot create a new matcher when the MongoDB Embedded Library is "
+                              "not yet initialized."};
     }
 
     if (library.get() != lib) {
         throw MobileException{MONGO_EMBEDDED_V1_ERROR_INVALID_LIB_HANDLE,
-                              "Cannot create a new database handle when the MongoDB Embedded "
-                              "Library is not yet initialized."};
+                              "Cannot create a new matcher when the MongoDB Embedded Library is "
+                              "not yet initialized."};
     }
 
-    // BSONObj pattern = BSON("$gt" << 1);
     return new mongo_embedded_v1_matcher(lib->serviceContext->makeClient("stitch_support"),
                                          pattern);
+}
+
+mongo_embedded_v1_projection* projection_new(mongo_embedded_v1_lib* const lib,
+                                             BSONObj spec,
+                                             mongo_embedded_v1_matcher* matcher) {
+    if (!library) {
+        throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
+                              "Cannot create a new projection when the MongoDB Embedded Library is "
+                              "not yet initialized."};
+    }
+
+    if (library.get() != lib) {
+        throw MobileException{MONGO_EMBEDDED_V1_ERROR_INVALID_LIB_HANDLE,
+                              "Cannot create a new projection when the MongoDB Embedded Library is "
+                              "not yet initialized."};
+    }
+
+    return new mongo_embedded_v1_projection(
+        lib->serviceContext->makeClient("stitch_support"), matcher, spec);
 }
 
 int capi_status_get_error(const mongo_embedded_v1_status* const status) noexcept {
@@ -382,14 +422,13 @@ mongo_embedded_v1_matcher_create(mongo_embedded_v1_lib* lib,
                                  mongo_embedded_v1_status* const statusPtr) {
     return enterCXX(statusPtr, [&](mongo_embedded_v1_status& status) {
         mongo::BSONObj pattern(patternBSON);
-        return mongo::matcher_new(lib, pattern.getOwned(), status);
+        return mongo::matcher_new(lib, pattern.getOwned());
     });
 }
 
 void MONGO_API_CALL mongo_embedded_v1_matcher_destroy(mongo_embedded_v1_matcher* const matcher) {
     delete matcher;
 }
-
 
 mongo_embedded_v1_error MONGO_API_CALL
 mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
@@ -413,6 +452,57 @@ mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
     });
 
     return statusPtr->error;
+}
+
+mongo_embedded_v1_projection* MONGO_API_CALL
+mongo_embedded_v1_projection_create(mongo_embedded_v1_lib* lib,
+                                    const char* specBSON,
+                                    mongo_embedded_v1_matcher* matcher,
+                                    mongo_embedded_v1_status* const statusPtr) {
+    return enterCXX(statusPtr, [&](mongo_embedded_v1_status& status) {
+        mongo::BSONObj spec(specBSON);
+        return mongo::projection_new(lib, spec.getOwned(), matcher);
+    });
+}
+
+void MONGO_API_CALL
+mongo_embedded_v1_projection_destroy(mongo_embedded_v1_projection* const projection) {
+    delete projection;
+}
+
+char* MONGO_API_CALL
+mongo_embedded_v1_projection_apply(mongo_embedded_v1_projection* const projection,
+                                   const char* documentBSON,
+                                   char* output,
+                                   size_t output_size,
+                                   mongo_embedded_v1_status* status) {
+    return enterCXX(status, [&](mongo_embedded_v1_status& status) {
+        mongo::BSONObj document(documentBSON);
+        mongo::WorkingSetMember wsm;
+        wsm.obj = mongo::Snapshotted<mongo::BSONObj>(mongo::SnapshotId(), document.getOwned());
+        wsm.recordId = mongo::RecordId();
+        wsm.transitionToOwnedObj();
+
+        uassertStatusOK(projection->projectionExec.transform(&wsm));
+
+        auto& outputObj = wsm.obj.value();
+        if (output) {
+            uassert(mongo::ErrorCodes::ExceededMemoryLimit,
+                    "Result of projection too large for output buffer",
+                    static_cast<size_t>(outputObj.objsize()) <= output_size);
+        } else {
+            output_size = static_cast<size_t>(outputObj.objsize());
+            output = static_cast<char*>(malloc(output_size));
+
+            uassert(mongo::ErrorCodes::ExceededMemoryLimit,
+                    "Failed to allocate memory for projection",
+                    output);
+        }
+
+        memcpy(
+            static_cast<void*>(output), static_cast<const void*>(outputObj.objdata()), output_size);
+        return output;
+    });
 }
 
 int MONGO_API_CALL
