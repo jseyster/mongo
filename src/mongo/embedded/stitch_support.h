@@ -173,10 +173,53 @@ mongo_embedded_v1_match_details_elem_match_path_component(
     bool* out_is_array_index,
     size_t* out_component_as_index*/);
 
+typedef struct mongo_embedded_v1_update_details mongo_embedded_v1_update_details;
+
+/**
+ * Create an "update details" object to pass to mongo_embedded_v1_update_apply(), which will
+ * populate the update details with a list of paths modified by the update.
+ *
+ * Clients can reuse the same update details object for multiple calls to
+ * mongo_embedded_v1_update_apply().
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_update_details* MONGO_API_CALL
+mongo_embedded_v1_update_details_create(void);
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_update_details_destroy(mongo_embedded_v1_update_details* update_details);
+
+// TODO: This should be on the update, not the UpdateDetails
+MONGO_EMBEDDED_CAPI_API bool MONGO_API_CALL
+mongo_embedded_v1_update_details_is_replacement(mongo_embedded_v1_update_details* update_details);
+
+/**
+ * The number of modified paths in an update details object. Always call this function to ensure an
+ * index is in bounds before calling mongo_embedded_v1_update_details_path_length() or
+ * mongo_embedded_v1_update_details_path_component().
+ */
+MONGO_EMBEDDED_CAPI_API size_t MONGO_API_CALL mongo_embedded_v1_update_details_num_modified_paths(
+    mongo_embedded_v1_update_details* update_details);
+
+/**
+ * The number of path components in the modified path at the given index. Always call this function
+ * to ensure an index is in bounds before calling mongo_embedded_v1_update_details_path_component().
+ */
+MONGO_EMBEDDED_CAPI_API size_t MONGO_API_CALL mongo_embedded_v1_update_details_path_length(
+    mongo_embedded_v1_update_details* update_details, size_t path_index);
+
+/**
+ * Return a component from one of the modified paths in the update details object. The above note
+ *  about distinguishing field names from array indexes in the documentation of
+ * mongo_embedded_v1_match_details_elem_match_path_component() also applies here.
+ */
+MONGO_EMBEDDED_CAPI_API const char* MONGO_API_CALL mongo_embedded_v1_update_details_path_component(
+    mongo_embedded_v1_update_details* update_details, size_t path_index, size_t component_index);
+
 typedef struct mongo_embedded_v1_lib mongo_embedded_v1_lib;
 typedef struct mongo_embedded_v1_init_params mongo_embedded_v1_init_params;
 typedef struct mongo_embedded_v1_matcher mongo_embedded_v1_matcher;
 typedef struct mongo_embedded_v1_projection mongo_embedded_v1_projection;
+typedef struct mongo_embedded_v1_update mongo_embedded_v1_update;
 
 /**
  * A client program should call this library initialization function exactly once.
@@ -255,6 +298,50 @@ mongo_embedded_v1_projection_apply(mongo_embedded_v1_projection* const projectio
                                    char* output,
                                    size_t output_size,
                                    mongo_embedded_v1_status* status);
+
+/**
+ * An update object is used to apply an update to a BSON document, which may modify particular
+ * fields (e.g.: {$set: {a: 1}}) or replace the entire document with a new one.
+ * 
+ * If the update expression includes a positional ($) operator, then the caller must pass a
+ * mongo_embedded_v1_matcher, which is used to determine which array element matches the positional.
+ * The 'matcher' argument is not used when the update expression has no positional operator, and it
+ * can be NULL.
+ * 
+ * The newly created update object does _not_ take ownership of the 'matcher' object. The client is
+ * responsible for ensuring that the matcher continues to exist for the lifetime of the update and
+ * for ultimately destroying both the update and the matcher.
+ */
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_update* MONGO_API_CALL
+mongo_embedded_v1_update_create(mongo_embedded_v1_lib* lib,
+                                const char* updateBSON,
+                                const char* arrayFiltersBSON,
+                                mongo_embedded_v1_matcher* matcher,
+                                mongo_embedded_v1_status* status);
+
+/ONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_update_destroy(mongo_embedded_v1_update* const update);
+
+/**
+ * Apply an update to an input document, writing the resulting BSON to the 'output' buffer. Returns
+ * a pointer to the output buffer (which is the same as the value of 'output' when it is not NULL)
+ * on success or NULL on error (including whne 'output_size' is too small to fit the update result).
+ * 
+ * The caller may pass NULL for the 'output' argument, in which case this function allocates a
+ * buffer of exactly the right size for the resulting document (ignoring the value of
+ * 'output_size'). The caller is responsible for destroying the result buffer with free().
+ * 
+ * If the update includes a positional ($) operator, the caller should verify before applying it
+ * that the associated matcher matches the input document. A non-matching input document will
+ * trigger an assertion failure.
+ */
+MONGO_EMBEDDED_CAPI_API char* MONGO_API_CALL
+mongo_embedded_v1_update_apply(mongo_embedded_v1_update* const update,
+                               const char* documentBSON,
+                               char* output,
+                               size_t output_size,
+                               mongo_embedded_v1_update_details* update_details,
+                               mongo_embedded_v1_status* status);
 
 /**
  * Valid bits for the log_flags bitfield in mongo_embedded_v1_init_params.

@@ -37,7 +37,9 @@
 #include "mongo/db/exec/projection_exec.h"
 #include "mongo/db/matcher/match_details.h"
 #include "mongo/db/matcher/matcher.h"
+#include "mongo/db/ops/parsed_update.h"
 #include "mongo/db/pipeline/expression_context.h"
+#include "mongo/db/update/update_driver.h"
 #include "mongo/logger/log_manager.h"
 #include "mongo/logger/logger.h"
 #include "mongo/transport/transport_layer_mock.h"
@@ -192,11 +194,11 @@ struct mongo_embedded_v1_matcher {
 };
 
 struct mongo_embedded_v1_match_details {
-    mongo::MatchDetails matchDetails;
-
     mongo_embedded_v1_match_details() : matchDetails() {
         matchDetails.requestElemMatchKey();
     }
+
+    mongo::MatchDetails matchDetails;
 };
 
 struct mongo_embedded_v1_projection {
@@ -220,6 +222,64 @@ struct mongo_embedded_v1_projection {
     mongo::ProjectionExec projectionExec;
 
     mongo_embedded_v1_matcher* matcher;
+};
+
+struct mongo_embedded_v1_update_details {
+    mongo_embedded_v1_update_details() : isReplacement(false) {}
+
+    void populateModifiedPathsFromFieldRefs(const std::vector<mongo::FieldRef>& fieldRefList) {
+        modifiedPaths.clear();
+
+        for (auto&& fieldRef : fieldRefList) {
+            std::vector<std::string> newPath;
+            for (size_t i = 0; i < fieldRef.numParts(); ++i) {
+                newPath.push_back(fieldRef.getPart(i).toString());
+            }
+            modifiedPaths.push_back(std::move(newPath));
+        }
+    }
+
+    bool isReplacement;
+    std::vector<std::vector<std::string>> modifiedPaths;
+};
+
+struct mongo_embedded_v1_update {
+    mongo_embedded_v1_update(mongo::ServiceContext::UniqueClient client,
+                             mongo::BSONObj updateExpr,
+                             mongo::BSONArray arrayFilters,
+                             mongo_embedded_v1_matcher* matcher)
+        : client(std::move(client)),
+          opCtx(this->client->makeOperationContext()),
+          updateExpr(updateExpr.getOwned()),
+          arrayFilters(arrayFilters.getOwned()),
+          matcher(matcher),
+          updateDriver(new mongo::ExpressionContext(opCtx.get(), nullptr)) {
+        std::vector<mongo::BSONObj> arrayFilterVector;
+        for (auto&& filter : this->arrayFilters) {
+            arrayFilterVector.push_back(filter.embeddedObject());
+        }
+        uassertStatusOK(mongo::ParsedUpdate::parseArrayFilters(
+            arrayFilterVector, this->opCtx.get(), nullptr /* collator */, this->parsedFilters));
+
+        // Initializing the update as single-document allows document-replacement updates.
+        bool multi = false;
+
+        updateDriver.parse(this->updateExpr, parsedFilters, multi);
+
+        uassert(50953,
+                "Updates with a positional oeprator require a matcher",
+                matcher || !updateDriver.needMatchDetails());
+    }
+
+    mongo::ServiceContext::UniqueClient client;
+    mongo::ServiceContext::UniqueOperationContext opCtx;
+    mongo::BSONObj updateExpr;
+    mongo::BSONArray arrayFilters;
+
+    mongo_embedded_v1_matcher* matcher;
+
+    std::map<mongo::StringData, std::unique_ptr<mongo::ExpressionWithPlaceholder>> parsedFilters;
+    mongo::UpdateDriver updateDriver;
 };
 
 namespace mongo {
@@ -322,6 +382,26 @@ mongo_embedded_v1_projection* projection_new(mongo_embedded_v1_lib* const lib,
 
     return new mongo_embedded_v1_projection(
         lib->serviceContext->makeClient("stitch_support"), matcher, spec);
+}
+
+mongo_embedded_v1_update* update_new(mongo_embedded_v1_lib* const lib,
+                                     BSONObj updateExpr,
+                                     BSONArray arrayFilters,
+                                     mongo_embedded_v1_matcher* matcher) {
+    if (!library) {
+        throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
+                              "Cannot create a new update when the MongoDB Embedded Library is "
+                              "not yet initialized."};
+    }
+
+    if (library.get() != lib) {
+        throw MobileException{MONGO_EMBEDDED_V1_ERROR_INVALID_LIB_HANDLE,
+                              "Cannot create a new udpate when the MongoDB Embedded Library is "
+                              "not yet initialized."};
+    }
+
+    return new mongo_embedded_v1_update(
+        lib->serviceContext->makeClient("stitch_support"), updateExpr, arrayFilters, matcher);
 }
 
 int capi_status_get_error(const mongo_embedded_v1_status* const status) noexcept {
@@ -505,6 +585,90 @@ mongo_embedded_v1_projection_apply(mongo_embedded_v1_projection* const projectio
     });
 }
 
+mongo_embedded_v1_update* MONGO_API_CALL
+mongo_embedded_v1_update_create(mongo_embedded_v1_lib* lib,
+                                const char* updateExprBSON,
+                                const char* arrayFiltersBSON,
+                                mongo_embedded_v1_matcher* matcher,
+                                mongo_embedded_v1_status* status) {
+    return enterCXX(status, [&](mongo_embedded_v1_status& status) {
+        mongo::BSONObj updateExpr(updateExprBSON);
+        mongo::BSONArray arrayFilters(
+            (arrayFiltersBSON ? mongo::BSONObj(arrayFiltersBSON) : mongo::BSONObj()));
+        return mongo::update_new(lib, updateExpr, arrayFilters, matcher);
+    });
+}
+
+void MONGO_API_CALL mongo_embedded_v1_update_destroy(mongo_embedded_v1_update* const update) {
+    delete update;
+}
+
+char* MONGO_API_CALL
+mongo_embedded_v1_update_apply(mongo_embedded_v1_update* const update,
+                               const char* documentBSON,
+                               char* output,
+                               size_t output_size,
+                               mongo_embedded_v1_update_details* update_details,
+                               mongo_embedded_v1_status* status) {
+    return enterCXX(status, [&](mongo_embedded_v1_status& status) {
+        mongo::BSONObj document(documentBSON);
+        mongo::StringData matchedField;  // TODO: Populate with match_details
+
+        if (update->updateDriver.needMatchDetails()) {
+            invariant(update->matcher);
+
+            mongo::MatchDetails matchDetails;
+            matchDetails.requestElemMatchKey();
+            bool isMatch = update->matcher->matcher.matches(document, &matchDetails);
+            invariant(isMatch);
+            if (matchDetails.hasElemMatchKey()) {
+                matchedField = matchDetails.elemMatchKey();
+            } else {
+                // Empty 'matchedField' indicates that the matcher did not traverse an array.
+            }
+        }
+
+        mongo::mutablebson::Document mutableDoc(document,
+                                                mongo::mutablebson::Document::kInPlaceDisabled);
+
+        mongo::FieldRefSet immutablePaths;  // Empty set
+        bool docWasModified = false;
+
+        std::vector<mongo::FieldRef> modifiedPaths;
+
+        uassertStatusOK(update->updateDriver.update(matchedField,
+                                                    &mutableDoc,
+                                                    false /* validateForStorage */,
+                                                    immutablePaths,
+                                                    NULL /* logOpRec*/,
+                                                    &docWasModified,
+                                                    &modifiedPaths));
+
+        auto outputObj = mutableDoc.getObject();
+        if (output) {
+            uassert(mongo::ErrorCodes::ExceededMemoryLimit,
+                    "Result of update too large for output buffer",
+                    static_cast<size_t>(outputObj.objsize()) <= output_size);
+        } else {
+            output_size = static_cast<size_t>(outputObj.objsize());
+            output = static_cast<char*>(malloc(output_size));
+
+            uassert(mongo::ErrorCodes::ExceededMemoryLimit,
+                    "Failed to allocate memory for update",
+                    output);
+        }
+
+        memcpy(
+            static_cast<void*>(output), static_cast<const void*>(outputObj.objdata()), output_size);
+
+        if (update_details) {
+            update_details->populateModifiedPathsFromFieldRefs(modifiedPaths);
+        }
+
+        return output;
+    });
+}
+
 int MONGO_API_CALL
 mongo_embedded_v1_status_get_error(const mongo_embedded_v1_status* const status) {
     return mongo::capi_status_get_error(status);
@@ -568,4 +732,32 @@ const char* MONGO_API_CALL mongo_embedded_v1_match_details_elem_match_path_compo
 
     return component.c_str();
 }
+
+mongo_embedded_v1_update_details* MONGO_API_CALL mongo_embedded_v1_update_details_create(void) {
+    return new mongo_embedded_v1_update_details;
+};
+
+void MONGO_API_CALL
+mongo_embedded_v1_update_details_destroy(mongo_embedded_v1_update_details* update_details) {
+    delete update_details;
+};
+
+size_t MONGO_API_CALL mongo_embedded_v1_update_details_num_modified_paths(
+    mongo_embedded_v1_update_details* update_details) {
+    return update_details->modifiedPaths.size();
+}
+
+size_t MONGO_API_CALL mongo_embedded_v1_update_details_path_length(
+    mongo_embedded_v1_update_details* update_details, size_t path_index) {
+    invariant(path_index < update_details->modifiedPaths.size());
+    return update_details->modifiedPaths[path_index].size();
+}
+
+const char* MONGO_API_CALL mongo_embedded_v1_update_details_path_component(
+    mongo_embedded_v1_update_details* update_details, size_t path_index, size_t component_index) {
+    invariant(path_index < update_details->modifiedPaths.size());
+    invariant(component_index < update_details->modifiedPaths[path_index].size());
+    return update_details->modifiedPaths[path_index][component_index].c_str();
+}
+
 }  // extern "C"

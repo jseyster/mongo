@@ -313,13 +313,27 @@ UpdateNode::ApplyResult ModifierNode::applyToNonexistentElement(ApplyParams appl
 }
 
 UpdateNode::ApplyResult ModifierNode::apply(ApplyParams applyParams) const {
+    ApplyResult result;
     if (context == Context::kInsertOnly && !applyParams.insert) {
-        return ApplyResult::noopResult();
+        result = ApplyResult::noopResult();
     } else if (!applyParams.pathToCreate->empty()) {
-        return applyToNonexistentElement(applyParams);
+        result = applyToNonexistentElement(applyParams);
     } else {
-        return applyToExistingElement(applyParams);
+        result = applyToExistingElement(applyParams);
     }
+
+    if (applyParams.modifiedPaths) {
+        if (applyParams.pathToCreate->empty()) {
+            applyParams.modifiedPaths->emplace_back(applyParams.pathTaken->dottedField());
+        } else if (applyParams.pathTaken->empty()) {
+            applyParams.modifiedPaths->emplace_back(applyParams.pathToCreate->dottedField());
+        } else {
+            applyParams.modifiedPaths->emplace_back(applyParams.pathTaken->dottedField() + "." +
+                                                    applyParams.pathToCreate->dottedField());
+        }
+    }
+
+    return result;
 }
 
 void ModifierNode::validateUpdate(mutablebson::ConstElement updatedElement,

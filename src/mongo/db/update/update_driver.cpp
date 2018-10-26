@@ -243,7 +243,8 @@ Status UpdateDriver::update(StringData matchedField,
                             bool validateForStorage,
                             const FieldRefSet& immutablePaths,
                             BSONObj* logOpRec,
-                            bool* docWasModified) {
+                            bool* docWasModified,
+                            std::vector<FieldRef>* modifiedPaths) {
     // TODO: assert that update() is called at most once in a !_multi case.
 
     _affectIndices = (isDocReplacement() && (_indexedFields != NULL));
@@ -257,6 +258,7 @@ Status UpdateDriver::update(StringData matchedField,
     applyParams.fromOplogApplication = _fromOplogApplication;
     applyParams.validateForStorage = validateForStorage;
     applyParams.indexData = _indexedFields;
+    applyParams.modifiedPaths = modifiedPaths;
     if (_logOp && logOpRec) {
         applyParams.logBuilder = &logBuilder;
     }

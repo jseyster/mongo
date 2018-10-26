@@ -377,6 +377,14 @@ UpdateNode::ApplyResult UpdateObjectNode::apply(ApplyParams applyParams) const {
                 !applyParams.matchedField.empty());
     }
 
+    boost::optional<size_t> originalArraySize;
+    size_t originalModifiedPathsSize = 0;
+    if (applyParams.modifiedPaths && applyParams.pathToCreate->empty() &&
+        BSONType::Array == applyParams.element.getType()) {
+        originalArraySize = applyParams.element.countChildren();
+        originalModifiedPathsSize = applyParams.modifiedPaths->size();
+    }
+
     auto applyResult = ApplyResult::noopResult();
 
     for (const auto& pair : _children) {
@@ -426,6 +434,15 @@ UpdateNode::ApplyResult UpdateObjectNode::apply(ApplyParams applyParams) const {
     // 'matchedField' is alphabetically after all children, so we apply it now.
     if (applyPositional) {
         applyChild(*_positionalChild.get(), applyParams.matchedField, &applyParams, &applyResult);
+    }
+
+    if (originalArraySize && *originalArraySize != applyParams.element.countChildren()) {
+        invariant(applyParams.modifiedPaths->size() >= originalModifiedPathsSize);
+        applyParams.modifiedPaths->erase(applyParams.modifiedPaths->begin() +
+                                             originalModifiedPathsSize,
+                                         applyParams.modifiedPaths->end());
+
+        applyParams.modifiedPaths->emplace_back(applyParams.pathTaken->dottedField());
     }
 
     return applyResult;

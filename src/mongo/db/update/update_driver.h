@@ -99,7 +99,8 @@ public:
                   bool validateForStorage,
                   const FieldRefSet& immutablePaths,
                   BSONObj* logOpRec = nullptr,
-                  bool* docWasModified = nullptr);
+                  bool* docWasModified = nullptr,
+                  std::vector<FieldRef>* modifiedPaths = nullptr);
 
     //
     // Accessors

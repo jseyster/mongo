@@ -63,7 +63,8 @@ Status ParsedUpdate::parseRequest() {
         _collator = std::move(collator.getValue());
     }
 
-    Status status = parseArrayFilters();
+    Status status =
+        parseArrayFilters(_request->getArrayFilters(), _opCtx, _collator.get(), _arrayFilters);
     if (!status.isOK()) {
         return status;
     }
@@ -145,10 +146,13 @@ void ParsedUpdate::parseUpdate() {
     _driver.parse(_request->getUpdates(), _arrayFilters, _request->isMulti());
 }
 
-Status ParsedUpdate::parseArrayFilters() {
-    for (auto rawArrayFilter : _request->getArrayFilters()) {
-        boost::intrusive_ptr<ExpressionContext> expCtx(
-            new ExpressionContext(_opCtx, _collator.get()));
+Status ParsedUpdate::parseArrayFilters(
+    const std::vector<BSONObj>& rawArrayFiltersIn,
+    OperationContext* opCtx,
+    CollatorInterface* collator,
+    std::map<StringData, std::unique_ptr<ExpressionWithPlaceholder>>& arrayFiltersOut) {
+    for (auto rawArrayFilter : rawArrayFiltersIn) {
+        boost::intrusive_ptr<ExpressionContext> expCtx(new ExpressionContext(opCtx, collator));
         auto parsedArrayFilter =
             MatchExpressionParser::parse(rawArrayFilter,
                                          std::move(expCtx),
@@ -170,14 +174,14 @@ Status ParsedUpdate::parseArrayFilters() {
                 ErrorCodes::FailedToParse,
                 "Cannot use an expression without a top-level field name in arrayFilters");
         }
-        if (_arrayFilters.find(*fieldName) != _arrayFilters.end()) {
+        if (arrayFiltersOut.find(*fieldName) != arrayFiltersOut.end()) {
             return Status(ErrorCodes::FailedToParse,
                           str::stream()
                               << "Found multiple array filters with the same top-level field name "
                               << *fieldName);
         }
 
-        _arrayFilters[*fieldName] = std::move(finalArrayFilter);
+        arrayFiltersOut[*fieldName] = std::move(finalArrayFilter);
     }
 
     return Status::OK();

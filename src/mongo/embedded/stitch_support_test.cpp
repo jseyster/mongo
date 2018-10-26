@@ -46,24 +46,35 @@ static const char thumbs_down[] = {static_cast<char>(0xF0),
 /**
  * This JSON parsing function is intended for testing, not for parsing user input. It aborts if it
  * fails to parse its input or if there is not enough buffer space for the output.
- *
- * Returns a pointer to a static buffer. This function is not thread safe, and clients that need
- * long-term access to the resulting BSON should copy it to another location.
  */
-static const char* parseJSONToBufferOrDie(const char* json_string) {
-    static char out_buffer[4096];
+static const char* parseJSONToBufferOrDie(const char* json_string, char* out, size_t out_size) {
     int parsed_len = 0;
 
     // This may throw an exception, which will be left uncaught, also aborting the program.
     auto bson = mongo::fromjson(json_string, &parsed_len);
 
     if (parsed_len != static_cast<int>(strlen(json_string)) ||
-        static_cast<size_t>(bson.objsize()) > sizeof(out_buffer)) {
+        static_cast<size_t>(bson.objsize()) > out_size) {
         fprintf(stderr, "FATAL -- Failed to parse: \"%s\"\n", json_string);
         abort();
     }
 
-    memcpy(out_buffer, bson.objdata(), bson.objsize());
+    memcpy(out, bson.objdata(), bson.objsize());
+
+    return out;
+}
+
+/**
+ * This JSON parsing function is intended for testing, not for parsing user input. It aborts if it
+ * fails to parse its input or if there is not enough buffer space for the output.
+ *
+ * Returns a pointer to a static buffer. This function is not thread safe, and clients that need
+ * long-term access to the resulting BSON should copy it to another location.
+ */
+static const char* parseJSONOrDie(const char* json_string) {
+    static char out_buffer[4096];
+
+    parseJSONToBufferOrDie(json_string, out_buffer, sizeof(out_buffer));
 
     return out_buffer;
 }
@@ -126,7 +137,7 @@ static bool run_match_tests(mongo_embedded_v1_lib* lib) {
         match_test* test = &match_test_cases[i];
         bool isMatch = false;
         mongo_embedded_v1_matcher* matcher =
-            mongo_embedded_v1_matcher_create(lib, parseJSONToBufferOrDie(test->predicate), status);
+            mongo_embedded_v1_matcher_create(lib, parseJSONOrDie(test->predicate), status);
 
         if (!matcher) {
             fprintf(stderr,
@@ -137,7 +148,7 @@ static bool run_match_tests(mongo_embedded_v1_lib* lib) {
 
         if (MONGO_EMBEDDED_V1_SUCCESS !=
             mongo_embedded_v1_check_match(
-                matcher, parseJSONToBufferOrDie(test->document), &isMatch, match_details, status)) {
+                matcher, parseJSONOrDie(test->document), &isMatch, match_details, status)) {
             fprintf(stderr,
                     "Failed to check match: %s\n",
                     mongo_embedded_v1_status_get_explanation(status));
@@ -234,7 +245,7 @@ static struct projection_test projection_test_cases[] = {
 static size_t num_projection_test_cases =
     sizeof(projection_test_cases) / sizeof(projection_test_cases[0]);
 
-bool run_projection_tests(mongo_embedded_v1_lib* lib) {
+static bool run_projection_tests(mongo_embedded_v1_lib* lib) {
     printf("Projection test cases\n");
 
     int num_failures = 0;
@@ -250,7 +261,7 @@ bool run_projection_tests(mongo_embedded_v1_lib* lib) {
 
         if (test->match_predicate) {
             matcher = mongo_embedded_v1_matcher_create(
-                lib, parseJSONToBufferOrDie(test->match_predicate), status);
+                lib, parseJSONOrDie(test->match_predicate), status);
             if (!matcher) {
                 fprintf(stderr,
                         "Failed to create matcher: %s\n",
@@ -259,8 +270,8 @@ bool run_projection_tests(mongo_embedded_v1_lib* lib) {
             }
         }
 
-        projection = mongo_embedded_v1_projection_create(
-            lib, parseJSONToBufferOrDie(test->spec), matcher, status);
+        projection =
+            mongo_embedded_v1_projection_create(lib, parseJSONOrDie(test->spec), matcher, status);
         if (!projection) {
             fprintf(stderr,
                     "Failed to create projection: %s\n",
@@ -269,7 +280,7 @@ bool run_projection_tests(mongo_embedded_v1_lib* lib) {
         }
 
         projection_result = mongo_embedded_v1_projection_apply(
-            projection, parseJSONToBufferOrDie(test->document), NULL, 0, status);
+            projection, parseJSONOrDie(test->document), NULL, 0, status);
         if (!projection_result) {
             fprintf(stderr,
                     "Failed to apply projection: %s\n",
@@ -305,6 +316,168 @@ bool run_projection_tests(mongo_embedded_v1_lib* lib) {
     return (num_failures == 0);
 }
 
+struct update_test {
+    const char* update_expr;
+    const char* array_filter_exprs;
+    const char* match_predicate;
+
+    const char* document;
+
+    const char* expected_result;
+    const char* expected_modified_paths;
+};
+
+static struct update_test update_test_cases[] = {
+    {"{$set: {a: 2}}", NULL, NULL, "{a: 1}", "{ \"a\" : 2 }", "a"},
+    {"{$set: {'a.1.b': 2}}",
+     NULL,
+     NULL,
+     "{a: [{b: 1}]}",
+     "{ \"a\" : [ { \"b\" : 1 }, { \"b\" : 2 } ] }",
+     "a"},
+    {"{$set: {'a.0.b': 2}}",
+     NULL,
+     NULL,
+     "{a: [{b: 1}]}",
+     "{ \"a\" : [ { \"b\" : 2 } ] }",
+     "a, 0, b"},
+    {"{$set: {'a.1.b': 2, c: 3}}",
+     NULL,
+     NULL,
+     "{a: [{b: 1}]}",
+     "{ \"a\" : [ { \"b\" : 1 }, { \"b\" : 2 } ], \"c\" : 3 }",
+     "a;c"},
+    {"{$set: {'a.$': 3}}", NULL, "{a: 2}", "{a: [1, 2]}", "{ \"a\" : [ 1, 3 ] }", "a, 1"},
+    {"{$set: {'a.$.b': 3}}",
+     NULL,
+     "{'a.b': 2}",
+     "{a: [{b: 1}, {b: 2}]}",
+     "{ \"a\" : [ { \"b\" : 1 }, { \"b\" : 3 } ] }",
+     "a, 1, b"},
+    {"{$set: {'a.$[i]': 3}}", "[{i: 2}]", NULL, "{a: [1, 2]}", "{ \"a\" : [ 1, 3 ] }", "a, 1"},
+    {"{$set: {'a.$[i].b': 3}}",
+     "[{'i.b': 2}]",
+     NULL,
+     "{a: [{b: 1}, {b: 2}]}",
+     "{ \"a\" : [ { \"b\" : 1 }, { \"b\" : 3 } ] }",
+     "a, 1, b"},
+};
+
+static size_t num_update_test_cases = sizeof(update_test_cases) / sizeof(update_test_cases[0]);
+
+static const char* format_update_details(mongo_embedded_v1_update_details* update_details) {
+    static char output[4096];
+    char* output_tail = output;
+
+    output[0] = '\0';
+
+    size_t num_paths = mongo_embedded_v1_update_details_num_modified_paths(update_details);
+    for (size_t i = 0; i < num_paths; ++i) {
+        size_t path_length = mongo_embedded_v1_update_details_path_length(update_details, i);
+        for (size_t j = 0; j < path_length; ++j) {
+            const char* component =
+                mongo_embedded_v1_update_details_path_component(update_details, i, j);
+            const char* separator =
+                (j == (path_length - 1)) ? (i == (num_paths - 1)) ? "" : ";" : ", ";
+            output_tail += snprintf(
+                output_tail, output + sizeof(output) - output_tail, "%s%s", component, separator);
+
+            if (output_tail >= output + sizeof(output)) {
+                return output;
+            }
+        }
+    }
+
+    return output;
+}
+
+static bool run_update_tests(mongo_embedded_v1_lib* lib) {
+    printf("Update test cases\n");
+
+    int num_failures = 0;
+    mongo_embedded_v1_status* status = mongo_embedded_v1_status_create();
+    mongo_embedded_v1_update_details* update_details = mongo_embedded_v1_update_details_create();
+
+    for (size_t i = 0; i < num_update_test_cases; ++i) {
+        struct update_test* test = &update_test_cases[i];
+
+        mongo_embedded_v1_matcher* matcher = NULL;
+        mongo_embedded_v1_update* update = NULL;
+        char* update_result = NULL;
+        const char* formatted_result;
+
+        if (test->match_predicate) {
+            matcher = mongo_embedded_v1_matcher_create(
+                lib, parseJSONOrDie(test->match_predicate), status);
+            if (!matcher) {
+                fprintf(stderr,
+                        "Failed to create matcher: %s\n",
+                        mongo_embedded_v1_status_get_explanation(status));
+                goto fail;
+            }
+        }
+
+        char update_expr_buf[2048];
+        char array_filters_buf[2048];
+        update = mongo_embedded_v1_update_create(
+            lib,
+            parseJSONToBufferOrDie(test->update_expr, update_expr_buf, sizeof(update_expr_buf)),
+            test->array_filter_exprs ? parseJSONToBufferOrDie(test->array_filter_exprs,
+                                                              array_filters_buf,
+                                                              sizeof(array_filters_buf))
+                                     : NULL,
+            matcher,
+            status);
+
+        if (!update) {
+            fprintf(stderr,
+                    "Failed to create update: %s\n",
+                    mongo_embedded_v1_status_get_explanation(status));
+            goto fail;
+        }
+
+        update_result = mongo_embedded_v1_update_apply(
+            update, parseJSONOrDie(test->document), NULL, 0, update_details, status);
+        if (!update_result) {
+            fprintf(stderr,
+                    "Failed to apply update: %s\n",
+                    mongo_embedded_v1_status_get_explanation(status));
+            goto fail;
+        }
+
+        formatted_result = formatAsJSONOrDie(update_result);
+        if (strcmp(test->expected_result, formatted_result) != 0) {
+            fprintf(stderr, "Unexpected result from update: %s\n", formatted_result);
+            goto fail;
+        }
+
+        formatted_result = format_update_details(update_details);
+        if (strcmp(test->expected_modified_paths, formatted_result) != 0) {
+            fprintf(stderr, "Unexpected modfied paths: %s\n", formatted_result);
+            goto fail;
+        }
+
+        printf("Test case %zu: %s\n", i, thumbs_up);
+
+        mongo_embedded_v1_update_destroy(update);
+        mongo_embedded_v1_matcher_destroy(matcher);
+
+        continue;
+
+    fail:
+        ++num_failures;
+        printf("Test case %zu: %s\n", i, thumbs_down);
+
+        mongo_embedded_v1_update_destroy(update);
+        mongo_embedded_v1_matcher_destroy(matcher);
+    }
+
+    mongo_embedded_v1_status_destroy(status);
+    mongo_embedded_v1_update_details_destroy(update_details);
+
+    return (num_failures == 0);
+}
+
 int main(const int argc, const char* const* const argv) {
     mongo_embedded_v1_init_params params;
     params.yaml_config = NULL;
@@ -315,6 +488,7 @@ int main(const int argc, const char* const* const argv) {
     bool all_tests_passed = true;
     all_tests_passed &= run_match_tests(lib);
     all_tests_passed &= run_projection_tests(lib);
+    all_tests_passed &= run_update_tests(lib);
 
     exit(all_tests_passed ? 0 : 1);
 }
