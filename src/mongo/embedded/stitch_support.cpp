@@ -39,6 +39,7 @@
 #include "mongo/db/matcher/matcher.h"
 #include "mongo/db/ops/parsed_update.h"
 #include "mongo/db/pipeline/expression_context.h"
+#include "mongo/db/query/collation/collator_factory_interface.h"
 #include "mongo/db/update/update_driver.h"
 #include "mongo/logger/log_manager.h"
 #include "mongo/logger/logger.h"
@@ -73,7 +74,7 @@ mongo::ServiceContext* initialize(const char* yaml_config) {
     const char* argv[2] = {yaml_config, nullptr};
 
     mongo::Status status = mongo::runGlobalInitializers(yaml_config ? 1 : 0, argv, nullptr);
-    uassertStatusOKWithContext(status, "Global initilization failed");
+    uassertStatusOKWithContext(status, "Global initialization failed");
     mongo::setGlobalServiceContext(mongo::ServiceContext::make());
 
     return mongo::getGlobalServiceContext();
@@ -181,12 +182,21 @@ struct mongo_embedded_v1_lib {
     std::unique_ptr<mongo::transport::TransportLayerMock> transportLayer;
 };
 
+struct mongo_embedded_v1_collator {
+    mongo_embedded_v1_collator(std::unique_ptr<mongo::CollatorInterface> collator)
+        : collator(std::move(collator)) {}
+    std::unique_ptr<mongo::CollatorInterface> collator;
+};
+
 struct mongo_embedded_v1_matcher {
     mongo_embedded_v1_matcher(mongo::ServiceContext::UniqueClient client,
-                              const mongo::BSONObj& pattern)
+                              const mongo::BSONObj& pattern,
+                              mongo_embedded_v1_collator* collator)
         : client(std::move(client)),
           opCtx(this->client->makeOperationContext()),
-          matcher(pattern, new mongo::ExpressionContext(opCtx.get(), nullptr)){};
+          matcher(pattern,
+                  new mongo::ExpressionContext(opCtx.get(),
+                                               collator ? collator->collator.get() : nullptr)){};
 
     mongo::ServiceContext::UniqueClient client;
     mongo::ServiceContext::UniqueOperationContext opCtx;
@@ -204,13 +214,14 @@ struct mongo_embedded_v1_match_details {
 struct mongo_embedded_v1_projection {
     mongo_embedded_v1_projection(mongo::ServiceContext::UniqueClient client,
                                  mongo_embedded_v1_matcher* matcher,
+                                 mongo_embedded_v1_collator* collator,
                                  const mongo::BSONObj& pattern)
         : client(std::move(client)),
           opCtx(this->client->makeOperationContext()),
           projectionExec(opCtx.get(),
                          pattern,
                          matcher ? matcher->matcher.getMatchExpression() : nullptr,
-                         nullptr /* collator */),
+                         collator ? collator->collator.get() : nullptr),
           matcher(matcher) {
         uassert(50952,
                 "Projections with a positional operator require a matcher",
@@ -247,7 +258,8 @@ struct mongo_embedded_v1_update {
     mongo_embedded_v1_update(mongo::ServiceContext::UniqueClient client,
                              mongo::BSONObj updateExpr,
                              mongo::BSONArray arrayFilters,
-                             mongo_embedded_v1_matcher* matcher)
+                             mongo_embedded_v1_matcher* matcher,
+                             mongo_embedded_v1_collator* collator)
         : client(std::move(client)),
           opCtx(this->client->makeOperationContext()),
           updateExpr(updateExpr.getOwned()),
@@ -258,8 +270,11 @@ struct mongo_embedded_v1_update {
         for (auto&& filter : this->arrayFilters) {
             arrayFilterVector.push_back(filter.embeddedObject());
         }
-        uassertStatusOK(mongo::ParsedUpdate::parseArrayFilters(
-            arrayFilterVector, this->opCtx.get(), nullptr /* collator */, this->parsedFilters));
+        uassertStatusOK(
+            mongo::ParsedUpdate::parseArrayFilters(arrayFilterVector,
+                                                   this->opCtx.get(),
+                                                   collator ? collator->collator.get() : nullptr,
+                                                   this->parsedFilters));
 
         // Initializing the update as single-document allows document-replacement updates.
         bool multi = false;
@@ -348,7 +363,9 @@ mongo_embedded_v1_lib* stitch_support_lib_init(mongo_embedded_v1_init_params con
     throw;
 }
 
-mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib, BSONObj pattern) {
+mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib,
+                                       BSONObj pattern,
+                                       mongo_embedded_v1_collator* collator) {
     if (!library) {
         throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
                               "Cannot create a new matcher when the MongoDB Embedded Library is "
@@ -361,13 +378,14 @@ mongo_embedded_v1_matcher* matcher_new(mongo_embedded_v1_lib* const lib, BSONObj
                               "not yet initialized."};
     }
 
-    return new mongo_embedded_v1_matcher(lib->serviceContext->makeClient("stitch_support"),
-                                         pattern);
+    return new mongo_embedded_v1_matcher(
+        lib->serviceContext->makeClient("stitch_support"), pattern, collator);
 }
 
 mongo_embedded_v1_projection* projection_new(mongo_embedded_v1_lib* const lib,
                                              BSONObj spec,
-                                             mongo_embedded_v1_matcher* matcher) {
+                                             mongo_embedded_v1_matcher* matcher,
+                                             mongo_embedded_v1_collator* collator) {
     if (!library) {
         throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
                               "Cannot create a new projection when the MongoDB Embedded Library is "
@@ -381,13 +399,14 @@ mongo_embedded_v1_projection* projection_new(mongo_embedded_v1_lib* const lib,
     }
 
     return new mongo_embedded_v1_projection(
-        lib->serviceContext->makeClient("stitch_support"), matcher, spec);
+        lib->serviceContext->makeClient("stitch_support"), matcher, collator, spec);
 }
 
 mongo_embedded_v1_update* update_new(mongo_embedded_v1_lib* const lib,
                                      BSONObj updateExpr,
                                      BSONArray arrayFilters,
-                                     mongo_embedded_v1_matcher* matcher) {
+                                     mongo_embedded_v1_matcher* matcher,
+                                     mongo_embedded_v1_collator* collator) {
     if (!library) {
         throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
                               "Cannot create a new update when the MongoDB Embedded Library is "
@@ -400,8 +419,31 @@ mongo_embedded_v1_update* update_new(mongo_embedded_v1_lib* const lib,
                               "not yet initialized."};
     }
 
-    return new mongo_embedded_v1_update(
-        lib->serviceContext->makeClient("stitch_support"), updateExpr, arrayFilters, matcher);
+    return new mongo_embedded_v1_update(lib->serviceContext->makeClient("stitch_support"),
+                                        updateExpr,
+                                        arrayFilters,
+                                        matcher,
+                                        collator);
+}
+
+mongo_embedded_v1_collator* collator_new(mongo_embedded_v1_lib* const lib,
+                                         BSONObj collationSpecExpr) {
+    if (!library) {
+        throw MobileException{MONGO_EMBEDDED_V1_ERROR_LIBRARY_NOT_INITIALIZED,
+                              "Cannot create a new update when the MongoDB Embedded Library is "
+                              "not yet initialized."};
+    }
+
+    if (library.get() != lib) {
+        throw MobileException{MONGO_EMBEDDED_V1_ERROR_INVALID_LIB_HANDLE,
+                              "Cannot create a new udpate when the MongoDB Embedded Library is "
+                              "not yet initialized."};
+    }
+
+    auto statusWithCollator =
+        CollatorFactoryInterface::get(lib->serviceContext.get())->makeFromBSON(collationSpecExpr);
+    uassertStatusOK(statusWithCollator.getStatus());
+    return new mongo_embedded_v1_collator(std::move(statusWithCollator.getValue()));
 }
 
 int capi_status_get_error(const mongo_embedded_v1_status* const status) noexcept {
@@ -499,10 +541,11 @@ mongo_embedded_v1_lib* MONGO_API_CALL mongo_embedded_v1_lib_init(
 mongo_embedded_v1_matcher* MONGO_API_CALL
 mongo_embedded_v1_matcher_create(mongo_embedded_v1_lib* lib,
                                  const char* patternBSON,
+                                 mongo_embedded_v1_collator* collator,
                                  mongo_embedded_v1_status* const statusPtr) {
     return enterCXX(statusPtr, [&](mongo_embedded_v1_status& status) {
         mongo::BSONObj pattern(patternBSON);
-        return mongo::matcher_new(lib, pattern.getOwned());
+        return mongo::matcher_new(lib, pattern.getOwned(), collator);
     });
 }
 
@@ -538,10 +581,11 @@ mongo_embedded_v1_projection* MONGO_API_CALL
 mongo_embedded_v1_projection_create(mongo_embedded_v1_lib* lib,
                                     const char* specBSON,
                                     mongo_embedded_v1_matcher* matcher,
+                                    mongo_embedded_v1_collator* collator,
                                     mongo_embedded_v1_status* const statusPtr) {
     return enterCXX(statusPtr, [&](mongo_embedded_v1_status& status) {
         mongo::BSONObj spec(specBSON);
-        return mongo::projection_new(lib, spec.getOwned(), matcher);
+        return mongo::projection_new(lib, spec.getOwned(), matcher, collator);
     });
 }
 
@@ -590,12 +634,13 @@ mongo_embedded_v1_update_create(mongo_embedded_v1_lib* lib,
                                 const char* updateExprBSON,
                                 const char* arrayFiltersBSON,
                                 mongo_embedded_v1_matcher* matcher,
+                                mongo_embedded_v1_collator* collator,
                                 mongo_embedded_v1_status* status) {
     return enterCXX(status, [&](mongo_embedded_v1_status& status) {
         mongo::BSONObj updateExpr(updateExprBSON);
         mongo::BSONArray arrayFilters(
             (arrayFiltersBSON ? mongo::BSONObj(arrayFiltersBSON) : mongo::BSONObj()));
-        return mongo::update_new(lib, updateExpr, arrayFilters, matcher);
+        return mongo::update_new(lib, updateExpr, arrayFilters, matcher, collator);
     });
 }
 
@@ -690,6 +735,18 @@ mongo_embedded_v1_status* MONGO_API_CALL mongo_embedded_v1_status_create(void) {
 void MONGO_API_CALL mongo_embedded_v1_status_destroy(mongo_embedded_v1_status* const status) {
     delete status;
 }
+
+mongo_embedded_v1_collator* MONGO_API_CALL mongo_embedded_v1_collator_create(
+    mongo_embedded_v1_lib* lib, const char* collationBSON, mongo_embedded_v1_status* const status) {
+    return enterCXX(status, [&](mongo_embedded_v1_status& status) {
+        mongo::BSONObj collationSpecExpr(collationBSON);
+        return mongo::collator_new(lib, collationSpecExpr);
+    });
+}
+
+void MONGO_API_CALL mongo_embedded_v1_collator_destroy(mongo_embedded_v1_collator* collator) {
+    delete collator;
+};
 
 mongo_embedded_v1_match_details* MONGO_API_CALL mongo_embedded_v1_match_details_create(void) {
     return new mongo_embedded_v1_match_details;

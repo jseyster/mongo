@@ -227,15 +227,34 @@ typedef struct mongo_embedded_v1_update mongo_embedded_v1_update;
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_lib* MONGO_API_CALL mongo_embedded_v1_lib_init(
     const mongo_embedded_v1_init_params* params, mongo_embedded_v1_status* status);
 
+typedef struct mongo_embedded_v1_collator mongo_embedded_v1_collator;
+
+// TODO: Collator comments
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_collator* MONGO_API_CALL
+mongo_embedded_v1_collator_create(mongo_embedded_v1_lib* lib,
+                                  const char* collationBSON,
+                                  mongo_embedded_v1_status* const status);
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+mongo_embedded_v1_collator_destroy(mongo_embedded_v1_collator* collator);
+
 /**
  * A matcher object is used to determine if a BSON document matches a predicate. The predicate
  * itself is also represented as a BSON object, which is passed in the 'patternBSON' argument.
  *
  * This function will fail if the predicate is invalid, returning NULL and populating 'status' with
  * information about the error.
+ *
+ * The matcher can optionally use a collator. The newly created matcher does _not_ take ownership of
+ * its 'collator' object. The client is responsible for ensuring that the collator continues to
+ * exist for the lifetime of the matcher and for ultimately destroying both the collator and the
+ * matcher. Multiple matcher, projection, and update objects can share the same collation object.
  */
-MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_matcher* MONGO_API_CALL mongo_embedded_v1_matcher_create(
-    mongo_embedded_v1_lib* lib, const char* patternBSON, mongo_embedded_v1_status* status);
+MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_matcher* MONGO_API_CALL
+mongo_embedded_v1_matcher_create(mongo_embedded_v1_lib* lib,
+                                 const char* patternBSON,
+                                 mongo_embedded_v1_collator* collator,
+                                 mongo_embedded_v1_status* status);
 
 MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
 mongo_embedded_v1_matcher_destroy(mongo_embedded_v1_matcher* const matcher);
@@ -265,14 +284,21 @@ mongo_embedded_v1_check_match(mongo_embedded_v1_matcher* matcher,
  * The 'matcher' argument is not used when the specification has no positional operator, and it can
  * be NULL.
  *
- * The newly created projection object does _not_ take ownership of its 'matcher' object. The client
- * is responsible for ensuring that the matcher continues to exist for the lifetime of the
- * projection and for ultimately destroying both the projection and the matcher.
+ * The caller can optionally provide a collator, which is used when evaluating $elemMatch operators.
+ * When 'collator' is NULL, $elemMatch will use the default collation, even if 'matcher' has a
+ * collator object. Multiple matcher, projection, and update objects can share the same collation
+ * object.
+ *
+ * The newly created projection object does _not_ take ownership of its 'matcher' or 'collator'
+ * objects. The client is responsible for ensuring that the matcher and collator continue to exist
+ * for the lifetime of the projection and for ultimately destroying all three of the projection,
+ * matcher and collator.
  */
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_projection* MONGO_API_CALL
 mongo_embedded_v1_projection_create(mongo_embedded_v1_lib* lib,
                                     const char* specBSON,
                                     mongo_embedded_v1_matcher* matcher,
+                                    mongo_embedded_v1_collator* collator,
                                     mongo_embedded_v1_status* status);
 
 MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
@@ -302,35 +328,43 @@ mongo_embedded_v1_projection_apply(mongo_embedded_v1_projection* const projectio
 /**
  * An update object is used to apply an update to a BSON document, which may modify particular
  * fields (e.g.: {$set: {a: 1}}) or replace the entire document with a new one.
- * 
+ *
  * If the update expression includes a positional ($) operator, then the caller must pass a
  * mongo_embedded_v1_matcher, which is used to determine which array element matches the positional.
  * The 'matcher' argument is not used when the update expression has no positional operator, and it
  * can be NULL.
- * 
- * The newly created update object does _not_ take ownership of the 'matcher' object. The client is
- * responsible for ensuring that the matcher continues to exist for the lifetime of the update and
- * for ultimately destroying both the update and the matcher.
+ *
+ * The caller can optionally provide a collator, which is used when evaluating arrayFilters match
+ * expressions. When 'collator' is NULL, arrayFilters will use the default collation, even if
+ * 'matcher' has a collator object. Multiple matcher, projection, and update objects can share the
+ * same collation object.
+ *
+ * The newly created update object does _not_ take ownership of its 'matcher' or 'collators'
+ * objects. The client is responsible for ensuring that the matcher and collator continue to exist
+ * for the lifetime of the update and for ultimately destroying all three of the update, matcher,
+ * and collator.
  */
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_update* MONGO_API_CALL
 mongo_embedded_v1_update_create(mongo_embedded_v1_lib* lib,
                                 const char* updateBSON,
                                 const char* arrayFiltersBSON,
                                 mongo_embedded_v1_matcher* matcher,
+                                mongo_embedded_v1_collator* collator,
                                 mongo_embedded_v1_status* status);
 
-/ONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
+
+MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
 mongo_embedded_v1_update_destroy(mongo_embedded_v1_update* const update);
 
 /**
  * Apply an update to an input document, writing the resulting BSON to the 'output' buffer. Returns
  * a pointer to the output buffer (which is the same as the value of 'output' when it is not NULL)
  * on success or NULL on error (including whne 'output_size' is too small to fit the update result).
- * 
+ *
  * The caller may pass NULL for the 'output' argument, in which case this function allocates a
  * buffer of exactly the right size for the resulting document (ignoring the value of
  * 'output_size'). The caller is responsible for destroying the result buffer with free().
- * 
+ *
  * If the update includes a positional ($) operator, the caller should verify before applying it
  * that the associated matcher matches the input document. A non-matching input document will
  * trigger an assertion failure.

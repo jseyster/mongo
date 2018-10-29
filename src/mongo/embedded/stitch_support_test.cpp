@@ -136,8 +136,8 @@ static bool run_match_tests(mongo_embedded_v1_lib* lib) {
     for (size_t i = 0; i < num_match_test_cases; ++i) {
         match_test* test = &match_test_cases[i];
         bool isMatch = false;
-        mongo_embedded_v1_matcher* matcher =
-            mongo_embedded_v1_matcher_create(lib, parseJSONOrDie(test->predicate), status);
+        mongo_embedded_v1_matcher* matcher = mongo_embedded_v1_matcher_create(
+            lib, parseJSONOrDie(test->predicate), NULL /* collator */, status);
 
         if (!matcher) {
             fprintf(stderr,
@@ -261,7 +261,7 @@ static bool run_projection_tests(mongo_embedded_v1_lib* lib) {
 
         if (test->match_predicate) {
             matcher = mongo_embedded_v1_matcher_create(
-                lib, parseJSONOrDie(test->match_predicate), status);
+                lib, parseJSONOrDie(test->match_predicate), NULL /* collator */, status);
             if (!matcher) {
                 fprintf(stderr,
                         "Failed to create matcher: %s\n",
@@ -270,8 +270,8 @@ static bool run_projection_tests(mongo_embedded_v1_lib* lib) {
             }
         }
 
-        projection =
-            mongo_embedded_v1_projection_create(lib, parseJSONOrDie(test->spec), matcher, status);
+        projection = mongo_embedded_v1_projection_create(
+            lib, parseJSONOrDie(test->spec), matcher, NULL /* collator */, status);
         if (!projection) {
             fprintf(stderr,
                     "Failed to create projection: %s\n",
@@ -408,7 +408,7 @@ static bool run_update_tests(mongo_embedded_v1_lib* lib) {
 
         if (test->match_predicate) {
             matcher = mongo_embedded_v1_matcher_create(
-                lib, parseJSONOrDie(test->match_predicate), status);
+                lib, parseJSONOrDie(test->match_predicate), NULL /* collator */, status);
             if (!matcher) {
                 fprintf(stderr,
                         "Failed to create matcher: %s\n",
@@ -427,6 +427,7 @@ static bool run_update_tests(mongo_embedded_v1_lib* lib) {
                                                               sizeof(array_filters_buf))
                                      : NULL,
             matcher,
+            NULL /* collator*/,
             status);
 
         if (!update) {
