@@ -657,7 +657,7 @@ mongo_embedded_v1_update_apply(mongo_embedded_v1_update* const update,
                                mongo_embedded_v1_status* status) {
     return enterCXX(status, [&](mongo_embedded_v1_status& status) {
         mongo::BSONObj document(documentBSON);
-        mongo::StringData matchedField;  // TODO: Populate with match_details
+        mongo::StringData matchedField;
 
         if (update->updateDriver.needMatchDetails()) {
             invariant(update->matcher);
