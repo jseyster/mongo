@@ -714,6 +714,11 @@ mongo_embedded_v1_update_apply(mongo_embedded_v1_update* const update,
     });
 }
 
+bool MONGO_API_CALL
+mongo_embedded_v1_update_is_replacement(mongo_embedded_v1_update* update) {
+    return update->updateDriver.isDocReplacement();
+}
+
 int MONGO_API_CALL
 mongo_embedded_v1_status_get_error(const mongo_embedded_v1_status* const status) {
     return mongo::capi_status_get_error(status);

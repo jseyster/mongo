@@ -128,7 +128,7 @@ typedef struct mongo_embedded_v1_match_details mongo_embedded_v1_match_details;
  * Create a "match details" object to pass to mongo_embedded_v1_check_match(), which will populate
  * the match details with an "elem_path" if the match traverses an array element.
  *
- * Clients can resuse the same match details object for multiple calls to
+ * Clients can reuse the same match details object for multiple calls to
  * mongo_embedded_v1_check_match().
  */
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_match_details* MONGO_API_CALL
@@ -188,10 +188,6 @@ mongo_embedded_v1_update_details_create(void);
 MONGO_EMBEDDED_CAPI_API void MONGO_API_CALL
 mongo_embedded_v1_update_details_destroy(mongo_embedded_v1_update_details* update_details);
 
-// TODO: This should be on the update, not the UpdateDetails
-MONGO_EMBEDDED_CAPI_API bool MONGO_API_CALL
-mongo_embedded_v1_update_details_is_replacement(mongo_embedded_v1_update_details* update_details);
-
 /**
  * The number of modified paths in an update details object. Always call this function to ensure an
  * index is in bounds before calling mongo_embedded_v1_update_details_path_length() or
@@ -229,7 +225,15 @@ MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_lib* MONGO_API_CALL mongo_embedded_v1_
 
 typedef struct mongo_embedded_v1_collator mongo_embedded_v1_collator;
 
-// TODO: Collator comments
+/**
+ * A collator objection represents a parsed collation. A single collator can be used by multiple
+ * matcher, projection, and update objects.
+ *
+ * It is the client's responsibility to call mongo_embedded_v1_collator_destroy() to free up
+ * resources used by the collator. Once a collator is destroyed, it is not safe to call any
+ * functions on matcher, projection, and update objects that reference the collator, except for
+ * their destroy functions.
+ */
 MONGO_EMBEDDED_CAPI_API mongo_embedded_v1_collator* MONGO_API_CALL
 mongo_embedded_v1_collator_create(mongo_embedded_v1_lib* lib,
                                   const char* collationBSON,
@@ -376,6 +380,13 @@ mongo_embedded_v1_update_apply(mongo_embedded_v1_update* const update,
                                size_t output_size,
                                mongo_embedded_v1_update_details* update_details,
                                mongo_embedded_v1_status* status);
+
+/**
+ * Returns true if 'update' represents a document replacement or false if it represents an update
+ * that uses modifiers, such as the $set modifier.
+ */
+MONGO_EMBEDDED_CAPI_API bool MONGO_API_CALL
+mongo_embedded_v1_update_is_replacement(mongo_embedded_v1_update* update);
 
 /**
  * Valid bits for the log_flags bitfield in mongo_embedded_v1_init_params.
