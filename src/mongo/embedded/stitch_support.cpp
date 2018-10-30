@@ -714,8 +714,7 @@ mongo_embedded_v1_update_apply(mongo_embedded_v1_update* const update,
     });
 }
 
-bool MONGO_API_CALL
-mongo_embedded_v1_update_is_replacement(mongo_embedded_v1_update* update) {
+bool MONGO_API_CALL mongo_embedded_v1_update_is_replacement(mongo_embedded_v1_update* update) {
     return update->updateDriver.isDocReplacement();
 }
 
