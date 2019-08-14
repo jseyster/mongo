@@ -75,6 +75,21 @@ public:
     static void deserializeForSorter(BufReader& buf, DocumentMetadataFields* out);
 
     /**
+     * Converts a Value representing an in-memory sort key to a BSONObj representing a serialized
+     * sort key. If 'sortPatternSize' is 1, returns a BSON object with 'value' as it's only value -
+     * and an empty field name. Otherwise asserts that 'value' is an array of length
+     * 'sortPatternSize', and returns a BSONObj with one field for each value in the array, each
+     * field using the empty field name.
+     */
+    static BSONObj serializeSortKey(bool isSingleElementKey, const Value& value);
+
+    /**
+     * Converts a BSONObj representing a serialized sort key into a Value, which we use for
+     * in-memory comparisons. BSONObj {'': 1, '': [2, 3]} becomes Value [1, [2, 3]].
+     */
+    static Value deserializeSortKey(bool isSingleElementKey, const BSONObj& bsonSortKey);
+
+    /**
      * Constructs a new DocumentMetadataFields in an uninitialized state.
      */
     DocumentMetadataFields() = default;

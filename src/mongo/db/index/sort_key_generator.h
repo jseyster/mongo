@@ -77,6 +77,12 @@ public:
      */
     StatusWith<BSONObj> getSortKeyFromDocument(const BSONObj& obj, const Metadata*) const;
 
+    /**
+     * Returns the sort key for 'doc'. Attempts to generate the key using a fast path that does not
+     * handle arrays. If an array is encountered, falls back on extractKeyWithArray().
+     */
+    Value extractSortKey(const Document& doc) const;
+
 private:
     // Extracts the sort key from a WorkingSetMember which represents an index key. It is illegal to
     // call this if the working set member is not in RID_AND_IDX state. It is also illegal to call
@@ -87,6 +93,31 @@ private:
     // sort components of the sort pattern. The caller is responsible for augmenting this key with
     // the appropriate metadata if '_sortHasMeta' is true.
     StatusWith<BSONObj> getSortKeyFromDocumentWithoutMetadata(const BSONObj& obj) const;
+
+    /**
+     * Returns the sort key for 'doc' based on the SortPattern, or ErrorCodes::InternalError if an
+     * array is encountered during sort key generation.
+     */
+    StatusWith<Value> extractKeyFast(const Document& doc) const;
+
+    /**
+     * Extracts the sort key component described by 'keyPart' from 'doc' and returns it. Returns
+     * ErrorCodes::Internal error if the path for 'keyPart' contains an array in 'doc'.
+     */
+    StatusWith<Value> extractKeyPart(const Document& doc,
+                                     const SortPattern::SortPatternPart& keyPart) const;
+
+    /**
+     * Returns the sort key for 'doc' based on the SortPattern. Note this is in the BSONObj format -
+     * with empty field names.
+     */
+    BSONObj extractKeyWithArray(const Document& doc) const;
+
+    /**
+     * Returns the comparison key used to sort 'val' with collation. Note that these comparison keys
+     * should always be sorted with the simple (i.e. binary) collation.
+     */
+    Value getCollationComparisonKey(const Value& val) const;
 
     const CollatorInterface* _collator = nullptr;
 

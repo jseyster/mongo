@@ -192,4 +192,105 @@ StatusWith<BSONObj> SortKeyGenerator::getSortKeyFromDocumentWithoutMetadata(
     return KeyString::toBson(*keys.begin(), Ordering::make(_sortSpecWithoutMeta));
 }
 
+Value SortKeyGenerator::getCollationComparisonKey(const Value& val) const {
+    // If the collation is the simple collation, the value itself is the comparison key.
+    if (!_collator) {
+        return val;
+    }
+
+    // If 'val' is not a collatable type, there's no need to do any work.
+    if (!CollationIndexKey::isCollatableType(val.getType())) {
+        return val;
+    }
+
+    // If 'val' is a string, directly use the collator to obtain a comparison key.
+    if (val.getType() == BSONType::String) {
+        auto compKey = _collator->getComparisonKey(val.getString());
+        return Value(compKey.getKeyData());
+    }
+
+    // Otherwise, for non-string collatable types, take the slow path and round-trip the value
+    // through BSON.
+    BSONObjBuilder input;
+    val.addToBsonObj(&input, ""_sd);
+
+    BSONObjBuilder output;
+    CollationIndexKey::collationAwareIndexKeyAppend(input.obj().firstElement(), _collator, &output);
+    return Value(output.obj().firstElement());
+}
+
+StatusWith<Value> SortKeyGenerator::extractKeyPart(
+    const Document& doc, const SortPattern::SortPatternPart& patternPart) const {
+    Value plainKey;
+    if (patternPart.fieldPath) {
+        invariant(!patternPart.expression);
+        auto key =
+            document_path_support::extractElementAlongNonArrayPath(doc, *patternPart.fieldPath);
+        if (!key.isOK()) {
+            return key;
+        }
+        plainKey = key.getValue();
+    } else {
+        invariant(patternPart.expression);
+        // ExpressionMeta does not use Variables.
+        plainKey = patternPart.expression->evaluate(doc, nullptr /* variables */);
+    }
+
+    return getCollationComparisonKey(plainKey);
+}
+
+StatusWith<Value> SortKeyGenerator::extractKeyFast(const Document& doc) const {
+    if (_sortPattern.size() == 1u) {
+        return extractKeyPart(doc, _sortPattern[0]);
+    }
+
+    std::vector<Value> keys;
+    keys.reserve(_sortPattern.size());
+    for (auto&& keyPart : _sortPattern) {
+        auto extractedKey = extractKeyPart(doc, keyPart);
+        if (!extractedKey.isOK()) {
+            // We can't use the fast path, so bail out.
+            return extractedKey;
+        }
+
+        keys.push_back(std::move(extractedKey.getValue()));
+    }
+    return Value{std::move(keys)};
+}
+
+BSONObj SortKeyGenerator::extractKeyWithArray(const Document& doc) const {
+    SortKeyGenerator::Metadata metadata;
+    if (doc.metadata().hasTextScore()) {
+        metadata.textScore = doc.metadata().getTextScore();
+    }
+    if (doc.metadata().hasRandVal()) {
+        metadata.randVal = doc.metadata().getRandVal();
+    }
+
+    // Convert the Document to a BSONObj, but only do the conversion for the paths we actually need.
+    // Then run the result through the SortKeyGenerator to obtain the final sort key.
+    auto bsonDoc = _sortPattern.documentToBsonWithSortPaths(doc);
+    return uassertStatusOK(getSortKeyFromDocument(bsonDoc, &metadata));
+}
+
+Value SortKeyGenerator::extractSortKey(const Document& doc) const {
+    boost::optional<BSONObj> serializedSortKey;  // Only populated if we need to merge with other
+    // sorted results later. Serialized in the standard
+    // BSON sort key format with empty field names,
+    // e.g. {'': 1, '': [2, 3]}.
+
+    Value inMemorySortKey;  // The Value we will use for comparisons within the sorter.
+
+    auto fastKey = extractKeyFast(doc);
+    if (fastKey.isOK()) {
+        return std::move(fastKey.getValue());
+    }
+    // We have to do it the slow way - through the sort key generator. This will generate a BSON
+    // sort key, which is an object with empty field names. We then need to convert this BSON
+    // representation into the corresponding array of keys as a Value. BSONObj {'': 1, '': [2,
+    // 3]} becomes Value [1, [2, 3]].
+    serializedSortKey = extractKeyWithArray(doc);
+    return DocumentMetadataFields::deserializeSortKey(_sortPattern.size() == 1, *serializedSortKey);
+}
+
 }  // namespace mongo
