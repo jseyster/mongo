@@ -240,7 +240,7 @@ StatusWith<Value> SortKeyGenerator::extractKeyPart(
 }
 
 StatusWith<Value> SortKeyGenerator::extractKeyFast(const Document& doc) const {
-    if (_sortPattern.size() == 1u) {
+    if (_sortPattern.isSingleElementKey()) {
         return extractKeyPart(doc, _sortPattern[0]);
     }
 
@@ -273,24 +273,30 @@ BSONObj SortKeyGenerator::extractKeyWithArray(const Document& doc) const {
     return uassertStatusOK(getSortKeyFromDocument(bsonDoc, &metadata));
 }
 
-Value SortKeyGenerator::extractSortKey(const Document& doc) const {
-    boost::optional<BSONObj> serializedSortKey;  // Only populated if we need to merge with other
-    // sorted results later. Serialized in the standard
-    // BSON sort key format with empty field names,
-    // e.g. {'': 1, '': [2, 3]}.
-
-    Value inMemorySortKey;  // The Value we will use for comparisons within the sorter.
-
+Value SortKeyGenerator::getSortKeyFromDocument(const Document& doc,
+                                               BSONObj* serializedSortKeyOut) const {
+    // This fast pass directly generates a Value.
     auto fastKey = extractKeyFast(doc);
     if (fastKey.isOK()) {
+        // Compute the serialized version only if the caller wants it.
+        if (serializedSortKeyOut) {
+            *serializedSortKeyOut = DocumentMetadataFields::serializeSortKey(
+                _sortPattern.isSingleElementKey(), fastKey.getValue());
+        }
         return std::move(fastKey.getValue());
     }
-    // We have to do it the slow way - through the sort key generator. This will generate a BSON
-    // sort key, which is an object with empty field names. We then need to convert this BSON
-    // representation into the corresponding array of keys as a Value. BSONObj {'': 1, '': [2,
-    // 3]} becomes Value [1, [2, 3]].
-    serializedSortKey = extractKeyWithArray(doc);
-    return DocumentMetadataFields::deserializeSortKey(_sortPattern.size() == 1, *serializedSortKey);
+
+    // We have to do it the slow way - through the sort key generator. This will generate a
+    // serialized BSON sort key, which is an object with empty field names. We then need to
+    // deserialize this BSON representation so that it can be returned as a Value. BSONObj {'': 1,
+    // '': [2, 3]} becomes Value [1, [2, 3]].
+    BSONObj tempSerializedSortKey;
+    if (!serializedSortKeyOut) {
+        serializedSortKeyOut = &tempSerializedSortKey;
+    }
+    *serializedSortKeyOut = extractKeyWithArray(doc);
+    return DocumentMetadataFields::deserializeSortKey(_sortPattern.isSingleElementKey(),
+                                                      *serializedSortKeyOut);
 }
 
 }  // namespace mongo

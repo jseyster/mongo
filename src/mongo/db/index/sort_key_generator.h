@@ -78,10 +78,22 @@ public:
     StatusWith<BSONObj> getSortKeyFromDocument(const BSONObj& obj, const Metadata*) const;
 
     /**
-     * Returns the sort key for 'doc'. Attempts to generate the key using a fast path that does not
-     * handle arrays. If an array is encountered, falls back on extractKeyWithArray().
+     * Returns the sort key for the input 'doc' as a Value and, if requested, as a "serialized" BSON
+     * object via the 'serializedSortKeyOut' parameter.
+     *
+     * The Value sort key is an array Value with one element for each component in the sort pattern,
+     * except in the special case of a sort pattern with just one component, where the Value sort
+     * key is the single value for the sort key.
+     *
+     * The BSON "serialized" sort key has one unnamed BSON element for each component (e.g., {'': 1,
+     * '': [2, 3]}).
+     *
+     * The sort key is computed based on the sort pattern, the contents of the document, and if
+     * required by $meta sort specifiers, metadata in the Document. This function throws if it
+     * cannot compute the sort pattern.
      */
-    Value extractSortKey(const Document& doc) const;
+    Value getSortKeyFromDocument(const Document& doc,
+                                 BSONObj* serializedSortKeyOut = nullptr) const;
 
 private:
     // Extracts the sort key from a WorkingSetMember which represents an index key. It is illegal to
@@ -102,7 +114,7 @@ private:
 
     /**
      * Extracts the sort key component described by 'keyPart' from 'doc' and returns it. Returns
-     * ErrorCodes::Internal error if the path for 'keyPart' contains an array in 'doc'.
+     * ErrorCodes::InternalError if the path for 'keyPart' contains an array in 'doc'.
      */
     StatusWith<Value> extractKeyPart(const Document& doc,
                                      const SortPattern::SortPatternPart& keyPart) const;
