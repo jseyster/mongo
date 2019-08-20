@@ -76,18 +76,12 @@ public:
 
     /**
      * Singleton sort patterns are a special case. In memory, sort keys for singleton patterns get
-     * stored as a single Value, corresponding to the single component of the sort pattern.
+     * stored as a single Value, corresponding to the single component of the sort pattern. By
+     * contrast, sort patterns for "compound" sort keys get stored as a Value that is an a array,
+     * with one element for each component of the sort.
      */
     bool isSingleElementKey() const {
         return _sortPattern.size() == 1;
-    }
-
-    /**
-     * In memory, sort patterns for "compound" sort keys get stored as a Value that is an a array,
-     * with one element for each component of the sort.
-     */
-    bool isCompound() const {
-        return _sortPattern.size() > 1;
     }
 
     const SortPatternPart& operator[](int idx) const {

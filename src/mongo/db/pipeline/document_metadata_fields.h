@@ -76,10 +76,9 @@ public:
 
     /**
      * Converts a Value representing an in-memory sort key to a BSONObj representing a serialized
-     * sort key. If 'sortPatternSize' is 1, returns a BSON object with 'value' as it's only value -
-     * and an empty field name. Otherwise asserts that 'value' is an array of length
-     * 'sortPatternSize', and returns a BSONObj with one field for each value in the array, each
-     * field using the empty field name.
+     * sort key. If 'isSingleElementKey' is true, returns a BSON object with 'value' as its only
+     * value - and an empty field name. Otherwise returns a BSONObj with one field for each value in
+     * the array, each field using the empty string as the key name.
      */
     static BSONObj serializeSortKey(bool isSingleElementKey, const Value& value);
 

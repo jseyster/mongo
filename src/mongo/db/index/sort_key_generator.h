@@ -65,7 +65,7 @@ public:
      * If the sort pattern contains a $meta sort (e.g. sort by "textScore" or "randVal"), then the
      * necessary metadata is obtained from the WorkingSetMember.
      */
-    StatusWith<BSONObj> getSortKey(const WorkingSetMember&) const;
+    StatusWith<BSONObj> computeSortKey(const WorkingSetMember&) const;
 
     /**
      * Returns the key which should be used to sort 'obj', or a non-OK status if no key could be
@@ -75,36 +75,34 @@ public:
      * a $meta sort (i.e. if sortHasMeta() is true). These values are filled in at the corresponding
      * positions in the sort key.
      */
-    StatusWith<BSONObj> getSortKeyFromDocument(const BSONObj& obj, const Metadata*) const;
+    StatusWith<BSONObj> computeSortKeyFromDocument(const BSONObj& obj, const Metadata*) const;
 
     /**
-     * Returns the sort key for the input 'doc' as a Value and, if requested, as a "serialized" BSON
-     * object via the 'serializedSortKeyOut' parameter.
-     *
-     * The Value sort key is an array Value with one element for each component in the sort pattern,
-     * except in the special case of a sort pattern with just one component, where the Value sort
-     * key is the single value for the sort key.
-     *
-     * The BSON "serialized" sort key has one unnamed BSON element for each component (e.g., {'': 1,
-     * '': [2, 3]}).
+     * Returns the sort key for the input 'doc' as a Value. When the sort pattern has multiple
+     * components, the resulting sort key is a an Array-typed Value with one element for each
+     * component. For sort pattern with just one component, the sort key is a Value that represents
+     * the single element to sort on (which may or may not itself be an array).
      *
      * The sort key is computed based on the sort pattern, the contents of the document, and if
      * required by $meta sort specifiers, metadata in the Document. This function throws if it
      * cannot compute the sort pattern.
      */
-    Value getSortKeyFromDocument(const Document& doc,
-                                 BSONObj* serializedSortKeyOut = nullptr) const;
+    Value computeSortKeyFromDocument(const Document& doc) const;
+
+    bool isSingleElementKey() const {
+        return _sortPattern.isSingleElementKey();
+    }
 
 private:
     // Extracts the sort key from a WorkingSetMember which represents an index key. It is illegal to
     // call this if the working set member is not in RID_AND_IDX state. It is also illegal to call
     // this if the sort pattern has any $meta components.
-    StatusWith<BSONObj> getSortKeyFromIndexKey(const WorkingSetMember& member) const;
+    StatusWith<BSONObj> computeSortKeyFromIndexKey(const WorkingSetMember& member) const;
 
     // Extracts the sort key from 'obj', using '_sortSpecWithoutMeta' and thus ignoring any $meta
     // sort components of the sort pattern. The caller is responsible for augmenting this key with
     // the appropriate metadata if '_sortHasMeta' is true.
-    StatusWith<BSONObj> getSortKeyFromDocumentWithoutMetadata(const BSONObj& obj) const;
+    StatusWith<BSONObj> computeSortKeyFromDocumentWithoutMetadata(const BSONObj& obj) const;
 
     /**
      * Returns the sort key for 'doc' based on the SortPattern, or ErrorCodes::InternalError if an

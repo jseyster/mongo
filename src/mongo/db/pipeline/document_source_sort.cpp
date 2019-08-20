@@ -216,28 +216,21 @@ bool DocumentSourceSort::usedDisk() {
 }
 
 std::pair<Value, Document> DocumentSourceSort::extractSortKey(Document&& doc) const {
-    std::pair<Value, Document> extractedKeyWithDocument;
-    Value& inMemorySortKey = extractedKeyWithDocument.first;
-    Document& toBeSorted = extractedKeyWithDocument.second;
+    Value inMemorySortKey = _sortKeyGen->computeSortKeyFromDocument(doc);
 
     if (pExpCtx->needsMerge) {
-        // The 'serializedSortKey' stores sort key values as BSON without field names (e.g.,
-        // {'': 1, '': [2, 3]}). We only compute the 'serializedSortKey' when we need to attach it
-        // to document metadata for use by a later merge stage.
-        BSONObj serializedSortKey;
-        inMemorySortKey = _sortKeyGen->getSortKeyFromDocument(doc, &serializedSortKey);
+        // If this sort stage is part of a merged pipeline, make sure that each Document's sort key
+        // gets saved with its metadata.
+        auto serializedSortKey = DocumentMetadataFields::serializeSortKey(
+            _sortKeyGen->isSingleElementKey(), inMemorySortKey);
 
-        MutableDocument mutableToBeSorted(std::move(doc));
-        mutableToBeSorted.metadata().setSortKey(serializedSortKey);
-        toBeSorted = mutableToBeSorted.freeze();
+        MutableDocument toBeSorted(std::move(doc));
+        toBeSorted.metadata().setSortKey(serializedSortKey);
+
+        return std::make_pair(std::move(inMemorySortKey), toBeSorted.freeze());
     } else {
-        // Don't compute 'serializedSortKey' if we don't need it, which makes the operation faster
-        // in some cases.
-        inMemorySortKey = _sortKeyGen->getSortKeyFromDocument(doc);
-        toBeSorted = std::move(doc);
+        return std::make_pair(std::move(inMemorySortKey), std::move(doc));
     }
-
-   return extractedKeyWithDocument;
 }
 
 boost::optional<DocumentSource::DistributedPlanLogic> DocumentSourceSort::distributedPlanLogic() {
